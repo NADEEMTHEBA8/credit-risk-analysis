@@ -1,0 +1,21 @@
+# Core data stack
+numpy>=1.24,<2.0
+pandas>=2.0,<3.0
+scipy>=1.10
+
+# Machine learning
+scikit-learn>=1.3,<2.0
+lightgbm>=4.0
+xgboost>=2.0
+
+# Visualisation
+matplotlib>=3.7
+seaborn>=0.12
+
+# Experiment tracking (optional, soft-imported in pipeline)
+mlflow>=2.7
+
+# Testing and code quality
+pytest>=7.4
+pytest-cov>=4.1
+ruff>=0.1.0
