@@ -6,11 +6,10 @@ Tables   : application_train/test · bureau · bureau_balance
            previous_application · POS_CASH_balance
            credit_card_balance · installments_payments
 
-Key finding from EDA:
-  Age (DAYS_BIRTH) is the strongest predictor of default — correlation 0.078.
-  Employment stability (employment_age_ratio) is second — correlation 0.058.
-  income_credit_ratio ranks 17th out of 19 features — correlation 0.002.
-  This finding directly shaped the SQL analysis layer.
+Top features (from actual EDA):
+  EXT_SOURCE_3, EXT_SOURCE_2, EXT_SOURCE_1 dominate — external bureau scores.
+  Among behavioural features: age, cc_utilisation, inst_late_rate are strongest.
+  income_credit_ratio ranks low despite being the expected primary signal.
 
 Pipeline stages:
   Load → Aggregate 6 secondary tables → Merge → Feature engineering
@@ -74,22 +73,31 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ─── IMPORT FROM utils ────────────────────────────────────────────────────────
-# Configuration constants and pure-function utilities live in src/utils.py.
-# Try the package-style import first (works when run as `python -m src.pipeline`
-# or imported from tests). Fall back to plain import for `python src/pipeline.py`.
+# ─── IMPORTS FROM SUB-MODULES ─────────────────────────────────────────────────
 try:
     from src.utils import (  # noqa: E402
         CV_FOLDS, DECISION_BETA, FIGURES, MISSING_DROP_PCT, PALETTE,
         PROCESSED, RANDOM_STATE, RAW_DIR, TEST_SIZE,
         load_csv, missing_profile, reduce_memory, safe_divide, validate_inputs,
     )
+    from src.aggregate import bureau as agg_bureau
+    from src.aggregate import previous as agg_previous
+    from src.aggregate import pos_cash as agg_pos
+    from src.aggregate import credit_card as agg_cc
+    from src.aggregate import installments as agg_inst
+    from src.features import engineer as engineer_features
 except ModuleNotFoundError:
     from utils import (  # noqa: E402
         CV_FOLDS, DECISION_BETA, FIGURES, MISSING_DROP_PCT, PALETTE,
         PROCESSED, RANDOM_STATE, RAW_DIR, TEST_SIZE,
         load_csv, missing_profile, reduce_memory, safe_divide, validate_inputs,
     )
+    from aggregate import bureau as agg_bureau
+    from aggregate import previous as agg_previous
+    from aggregate import pos_cash as agg_pos
+    from aggregate import credit_card as agg_cc
+    from aggregate import installments as agg_inst
+    from features import engineer as engineer_features
 
 for d in [RAW_DIR, PROCESSED, FIGURES]:
     os.makedirs(d, exist_ok=True)
@@ -106,13 +114,11 @@ validate_inputs()
 train_raw = load_csv('application_train.csv')
 test_raw  = load_csv('application_test.csv')
 
-# Concatenate before encoding so both splits get identical columns.
-# If a category level appears only in test, separate encoding would
-# silently drop it from that split's column set.
 train_raw['SET']   = 'train'
 test_raw['SET']    = 'test'
 test_raw['TARGET'] = np.nan
 app = pd.concat([train_raw, test_raw], ignore_index=True, sort=False)
+app_columns = list(app.columns)
 
 default_rate = app[app['SET'] == 'train']['TARGET'].mean() * 100
 log.info(f"  Train: {(app['SET']=='train').sum():,}  |  "
@@ -121,173 +127,12 @@ log.info(f"  Train: {(app['SET']=='train').sum():,}  |  "
 
 
 # ── SECONDARY TABLE AGGREGATION ───────────────────────────────────────────────
-# All secondary tables must be aggregated to ONE ROW PER CUSTOMER
-# before joining. Joining raw tables would multiply rows.
-# Early version used INNER JOIN — dropped ~37,000 first-time borrowers,
-# recall fell from 0.69 to 0.61. Switched to LEFT JOIN + imputation.
-
 log.info("\n[2/8] Aggregating secondary tables...")
-
-# Bureau + bureau_balance (two-level aggregation)
-bureau = load_csv('bureau.csv')
-bureau = reduce_memory(bureau)
-
-bb = load_csv('bureau_balance.csv')
-bb = reduce_memory(bb)
-# STATUS 1-5 = DPD bands (1=1-30 days late, etc.) C=closed, X=unknown
-bb['STATUS_BAD'] = bb['STATUS'].isin(['1','2','3','4','5']).astype(np.int8)
-bb_agg = bb.groupby('SK_ID_BUREAU').agg(
-    bb_months_total = ('MONTHS_BALANCE', 'count'),
-    bb_months_bad   = ('STATUS_BAD',     'sum'),
-    bb_max_dpd_band = ('STATUS_BAD',     'max'),
-).reset_index()
-del bb; gc.collect()
-
-bureau = bureau.merge(bb_agg, on='SK_ID_BUREAU', how='left')
-del bb_agg; gc.collect()
-
-bureau_agg = bureau.groupby('SK_ID_CURR').agg(
-    bur_num_credits       = ('SK_ID_BUREAU',          'count'),
-    bur_num_active        = ('CREDIT_ACTIVE',          lambda x: (x=='Active').sum()),
-    bur_num_closed        = ('CREDIT_ACTIVE',          lambda x: (x=='Closed').sum()),
-    bur_total_credit      = ('AMT_CREDIT_SUM',         'sum'),
-    bur_avg_credit        = ('AMT_CREDIT_SUM',         'mean'),
-    bur_total_debt        = ('AMT_CREDIT_SUM_DEBT',    'sum'),
-    bur_max_overdue       = ('AMT_CREDIT_SUM_OVERDUE', 'max'),
-    bur_avg_overdue       = ('AMT_CREDIT_SUM_OVERDUE', 'mean'),
-    bur_total_overdue     = ('AMT_CREDIT_SUM_OVERDUE', 'sum'),
-    bur_days_credit_mean  = ('DAYS_CREDIT',            'mean'),
-    bur_days_credit_min   = ('DAYS_CREDIT',            'min'),
-    bur_days_enddate_mean = ('DAYS_CREDIT_ENDDATE',    'mean'),
-    bur_days_enddate_max  = ('DAYS_CREDIT_ENDDATE',    'max'),
-    bur_prolong_sum       = ('CNT_CREDIT_PROLONG',     'sum'),
-    bur_num_bad_months    = ('bb_months_bad',          'sum'),
-    bur_avg_bad_months    = ('bb_months_bad',          'mean'),
-).reset_index()
-
-bur_cr = bureau_agg['bur_total_credit'].replace(0, np.nan)
-bureau_agg['bur_debt_credit_ratio']    = bureau_agg['bur_total_debt']    / bur_cr
-bureau_agg['bur_overdue_credit_ratio'] = bureau_agg['bur_total_overdue'] / bur_cr
-bureau_agg['bur_active_ratio']         = (bureau_agg['bur_num_active']
-                                           / bureau_agg['bur_num_credits'].replace(0, np.nan))
-bureau_agg = reduce_memory(bureau_agg)
-log.info(f"  Bureau: {bureau_agg.shape[1]-1} features")
-del bureau; gc.collect()
-
-# Previous applications
-prev = load_csv('previous_application.csv')
-prev = reduce_memory(prev)
-for c in [col for col in prev.columns if col.startswith('DAYS_')]:
-    prev[c] = prev[c].replace(365243, np.nan)
-
-prev_agg = prev.groupby('SK_ID_CURR').agg(
-    prev_num_applications      = ('SK_ID_PREV',            'count'),
-    prev_num_approved          = ('NAME_CONTRACT_STATUS',   lambda x: (x=='Approved').sum()),
-    prev_num_refused           = ('NAME_CONTRACT_STATUS',   lambda x: (x=='Refused').sum()),
-    prev_num_cancelled         = ('NAME_CONTRACT_STATUS',   lambda x: (x=='Canceled').sum()),
-    prev_amt_credit_sum        = ('AMT_CREDIT',             'sum'),
-    prev_amt_credit_mean       = ('AMT_CREDIT',             'mean'),
-    prev_amt_annuity_mean      = ('AMT_ANNUITY',            'mean'),
-    prev_amt_down_mean         = ('AMT_DOWN_PAYMENT',       'mean'),
-    prev_days_decision_mean    = ('DAYS_DECISION',          'mean'),
-    prev_days_decision_min     = ('DAYS_DECISION',          'min'),
-    prev_hour_appr_mean        = ('HOUR_APPR_PROCESS_START','mean'),
-    prev_rate_down_mean        = ('RATE_DOWN_PAYMENT',      'mean'),
-    prev_days_first_due_mean   = ('DAYS_FIRST_DUE',         'mean'),
-    prev_days_last_due_mean    = ('DAYS_LAST_DUE',          'mean'),
-    prev_days_termination_mean = ('DAYS_TERMINATION',       'mean'),
-    prev_cnt_payment_mean      = ('CNT_PAYMENT',            'mean'),
-).reset_index()
-
-prev_agg['prev_approval_rate'] = (prev_agg['prev_num_approved']
-                                   / prev_agg['prev_num_applications'].replace(0, np.nan))
-prev_agg['prev_refusal_rate']  = (prev_agg['prev_num_refused']
-                                   / prev_agg['prev_num_applications'].replace(0, np.nan))
-prev_agg = reduce_memory(prev_agg)
-log.info(f"  Previous apps: {prev_agg.shape[1]-1} features")
-del prev; gc.collect()
-
-# POS Cash balance
-pos = load_csv('POS_CASH_balance.csv')
-pos = reduce_memory(pos)
-pos_agg = pos.groupby('SK_ID_CURR').agg(
-    pos_num_records           = ('SK_ID_PREV',            'count'),
-    pos_months_balance_mean   = ('MONTHS_BALANCE',        'mean'),
-    pos_months_balance_max    = ('MONTHS_BALANCE',        'max'),
-    pos_cnt_instalment_mean   = ('CNT_INSTALMENT',        'mean'),
-    pos_cnt_instalment_future = ('CNT_INSTALMENT_FUTURE', 'mean'),
-    pos_sk_dpd_mean           = ('SK_DPD',                'mean'),
-    pos_sk_dpd_max            = ('SK_DPD',                'max'),
-    pos_sk_dpd_def_mean       = ('SK_DPD_DEF',            'mean'),
-    pos_sk_dpd_def_max        = ('SK_DPD_DEF',            'max'),
-    pos_num_completed         = ('NAME_CONTRACT_STATUS',  lambda x: (x=='Completed').sum()),
-    pos_num_active            = ('NAME_CONTRACT_STATUS',  lambda x: (x=='Active').sum()),
-).reset_index()
-pos_agg['pos_dpd_flag']        = (pos_agg['pos_sk_dpd_max'] > 0).astype(np.int8)
-pos_agg['pos_completion_rate'] = (pos_agg['pos_num_completed']
-                                   / pos_agg['pos_num_records'].replace(0, np.nan))
-pos_agg = reduce_memory(pos_agg)
-log.info(f"  POS Cash: {pos_agg.shape[1]-1} features")
-del pos; gc.collect()
-
-# Credit card balance
-cc = load_csv('credit_card_balance.csv')
-cc = reduce_memory(cc)
-cc_agg = cc.groupby('SK_ID_CURR').agg(
-    cc_num_records          = ('SK_ID_PREV',               'count'),
-    cc_months_balance_mean  = ('MONTHS_BALANCE',           'mean'),
-    cc_balance_mean         = ('AMT_BALANCE',              'mean'),
-    cc_balance_max          = ('AMT_BALANCE',              'max'),
-    cc_credit_limit_mean    = ('AMT_CREDIT_LIMIT_ACTUAL',  'mean'),
-    cc_drawings_mean        = ('AMT_DRAWINGS_CURRENT',     'mean'),
-    cc_drawings_total       = ('AMT_DRAWINGS_CURRENT',     'sum'),
-    cc_payment_current_mean = ('AMT_PAYMENT_CURRENT',      'mean'),
-    cc_payment_total_mean   = ('AMT_TOTAL_RECEIVABLE',     'mean'),
-    cc_dpd_mean             = ('SK_DPD',                   'mean'),
-    cc_dpd_max              = ('SK_DPD',                   'max'),
-    cc_dpd_def_mean         = ('SK_DPD_DEF',               'mean'),
-    cc_cnt_drawings_mean    = ('CNT_DRAWINGS_CURRENT',     'mean'),
-).reset_index()
-# cc_utilisation can exceed 1.0 (customer is over credit limit).
-# In EDA, util > 1.0 had a 25.91% default rate — the highest single signal found.
-# Using mean balance / mean limit captures typical behaviour rather than peak stress.
-cc_agg['cc_utilisation'] = (cc_agg['cc_balance_mean']
-                             / cc_agg['cc_credit_limit_mean'].replace(0, np.nan))
-cc_agg['cc_dpd_flag']    = (cc_agg['cc_dpd_max'] > 0).astype(np.int8)
-cc_agg['cc_over_limit']  = (cc_agg['cc_utilisation'] > 1.0).astype(np.int8)
-cc_agg = reduce_memory(cc_agg)
-log.info(f"  Credit card: {cc_agg.shape[1]-1} features")
-del cc; gc.collect()
-
-# Installment payments
-inst = load_csv('installments_payments.csv')
-inst = reduce_memory(inst)
-# DAYS_LATE > 0 = paid late. < 0 = paid early.
-# This is the 3rd strongest predictor after DAYS_BIRTH and cc_utilisation.
-inst['DAYS_LATE']      = inst['DAYS_ENTRY_PAYMENT'] - inst['DAYS_INSTALMENT']
-inst['PAYMENT_RATIO']  = inst['AMT_PAYMENT'] / inst['AMT_INSTALMENT'].replace(0, np.nan)
-inst['PAYMENT_DIFF']   = inst['AMT_INSTALMENT'] - inst['AMT_PAYMENT']
-inst['PAID_LATE_FLAG'] = (inst['DAYS_LATE'] > 0).astype(np.int8)
-inst['PAID_EARLY_FLAG']= (inst['DAYS_LATE'] < 0).astype(np.int8)
-inst_agg = inst.groupby('SK_ID_CURR').agg(
-    inst_num_records        = ('SK_ID_PREV',      'count'),
-    inst_days_late_mean     = ('DAYS_LATE',        'mean'),
-    inst_days_late_max      = ('DAYS_LATE',        'max'),
-    inst_days_late_sum      = ('DAYS_LATE',        'sum'),
-    inst_payment_ratio_mean = ('PAYMENT_RATIO',    'mean'),
-    inst_payment_ratio_min  = ('PAYMENT_RATIO',    'min'),
-    inst_payment_diff_mean  = ('PAYMENT_DIFF',     'mean'),
-    inst_payment_diff_max   = ('PAYMENT_DIFF',     'max'),
-    inst_num_late           = ('PAID_LATE_FLAG',   'sum'),
-    inst_num_early          = ('PAID_EARLY_FLAG',  'sum'),
-    inst_amt_payment_sum    = ('AMT_PAYMENT',      'sum'),
-    inst_amt_instalment_sum = ('AMT_INSTALMENT',   'sum'),
-).reset_index()
-inst_agg['inst_late_rate'] = (inst_agg['inst_num_late']
-                               / inst_agg['inst_num_records'].replace(0, np.nan))
-inst_agg = reduce_memory(inst_agg)
-log.info(f"  Installments: {inst_agg.shape[1]-1} features")
-del inst; gc.collect()
+bureau_agg = agg_bureau.run()
+prev_agg   = agg_previous.run()
+pos_agg    = agg_pos.run()
+cc_agg     = agg_cc.run()
+inst_agg   = agg_inst.run()
 
 
 # ── TABLE MERGE ───────────────────────────────────────────────────────────────
@@ -310,60 +155,7 @@ log.info(f"  Final merged shape: {df.shape}")
 
 # ── FEATURE ENGINEERING ───────────────────────────────────────────────────────
 log.info("\n[4/8] Engineering features...")
-
-# Must replace DAYS_EMPLOYED sentinel BEFORE abs().
-# 365243 = "unemployed" marker. If left in, abs() makes it a large
-# positive number and distorts employment_age_ratio badly.
-df['DAYS_EMPLOYED']      = df['DAYS_EMPLOYED'].replace(365243, np.nan)
-df['DAYS_EMPLOYED_FLAG'] = df['DAYS_EMPLOYED'].isnull().astype(np.int8)
-
-days_app = [c for c in df.columns if c.startswith('DAYS_') and c in app.columns]
-for c in days_app:
-    if c in df.columns:
-        df[c] = df[c].abs()
-
-# Ratio features.
-# Note: income_credit_ratio has very low correlation with default (0.002)
-# from actual data analysis. It was the expected top feature but is NOT.
-# Age (DAYS_BIRTH) is 44x stronger. Kept for completeness and SQL alignment.
-df['income_credit_ratio']  = safe_divide(df['AMT_INCOME_TOTAL'], df['AMT_CREDIT'])
-df['annuity_income_ratio'] = safe_divide(df['AMT_ANNUITY'],      df['AMT_INCOME_TOTAL'])
-df['credit_goods_ratio']   = safe_divide(df['AMT_CREDIT'],       df['AMT_GOODS_PRICE'])
-df['employment_age_ratio'] = safe_divide(df['DAYS_EMPLOYED'],    df['DAYS_BIRTH'])
-df['age_years']            = df['DAYS_BIRTH'].abs() / 365
-df['employed_years']       = df['DAYS_EMPLOYED'].abs() / 365
-df['income_per_person']    = safe_divide(df['AMT_INCOME_TOTAL'],
-                                          df['CNT_FAM_MEMBERS'].fillna(1))
-
-# Cross-table interaction features
-df['bur_debt_income_ratio'] = safe_divide(
-    df.get('bur_total_debt', pd.Series(0, index=df.index)),
-    df['AMT_INCOME_TOTAL'])
-df['inst_late_per_credit']  = safe_divide(
-    df.get('inst_num_late', pd.Series(0, index=df.index)),
-    df.get('prev_num_applications', pd.Series(1, index=df.index)))
-df['cc_util_income_ratio']  = safe_divide(
-    df.get('cc_utilisation', pd.Series(0, index=df.index)),
-    df['AMT_INCOME_TOTAL'])
-
-# Segmentation labels (for EDA and SQL only — dropped before ML)
-df['income_group'] = pd.cut(df['AMT_INCOME_TOTAL'],
-    bins=[0, 100_000, 200_000, float('inf')],
-    labels=['Low', 'Medium', 'High'], right=False)
-df['loan_size']    = pd.cut(df['AMT_CREDIT'],
-    bins=[0, 100_000, 500_000, float('inf')],
-    labels=['Small', 'Medium', 'Large'], right=False)
-df['age_group']    = pd.cut(df['age_years'],
-    bins=[0, 30, 40, 50, 60, float('inf')],
-    labels=['18-29', '30-39', '40-49', '50-59', '60+'])
-df['risk_level']   = pd.cut(df['income_credit_ratio'],
-    bins=[-0.001, 0.3, 0.6, float('inf')],
-    labels=['High Risk', 'Medium Risk', 'Low Risk'])
-df['employment_group'] = pd.cut(df['employment_age_ratio'],
-    bins=[-0.001, 0.1, 0.3, 0.6, float('inf')],
-    labels=['Unstable', 'Short-term', 'Moderate', 'Stable'])
-
-log.info(f"  Features after engineering: {df.shape[1]}")
+df = engineer_features(df, app_columns)
 
 
 # ── ENCODING ──────────────────────────────────────────────────────────────────
@@ -422,7 +214,6 @@ del df; gc.collect()
 X = train_df.drop(columns=['TARGET'])
 y = train_df['TARGET'].astype(int)
 
-# stratify=y preserves the 8.07% default rate in both splits
 X_train, X_val, y_train, y_val = train_test_split(
     X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y)
 log.info(f"  Train: {X_train.shape[0]:,}  |  Val: {X_val.shape[0]:,}")
@@ -441,14 +232,14 @@ eda['employment_group'] = pd.cut(eda['employment_age_ratio'],
 eda['income_group']     = pd.cut(eda['AMT_INCOME_TOTAL'],
     bins=[0,100_000,200_000,float('inf')], labels=['Low','Medium','High'], right=False)
 
-# Plot 1: Top 3 predictors vs default rate (based on actual correlation analysis)
+# Plot 1: Top 3 predictors vs default rate
 fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
 age_dr = eda.groupby('age_group', observed=True)['TARGET'].mean() * 100
 colors_age = [PALETTE['risk'] if v > 9 else PALETTE['neutral'] if v > 7
               else PALETTE['safe'] for v in age_dr.values]
 age_dr.plot(kind='bar', ax=axes[0], color=colors_age, edgecolor='white')
-axes[0].set_title('Default Rate by Age Group\n(Strongest predictor — correlation 0.078)',
+axes[0].set_title('Default Rate by Age Group\n(Strongest behavioural predictor — corr 0.078)',
                   fontweight='bold', fontsize=10)
 axes[0].set_ylabel('Default Rate (%)')
 axes[0].tick_params(axis='x', rotation=0)
@@ -459,7 +250,7 @@ emp_dr = eda.groupby('employment_group', observed=True)['TARGET'].mean() * 100
 colors_emp = [PALETTE['risk'] if v > 9 else PALETTE['neutral'] if v > 6
               else PALETTE['safe'] for v in emp_dr.values]
 emp_dr.plot(kind='bar', ax=axes[1], color=colors_emp, edgecolor='white')
-axes[1].set_title('Default Rate by Employment Stability\n(2nd strongest — correlation 0.058)',
+axes[1].set_title('Default Rate by Employment Stability\n(2nd strongest behavioural — corr 0.058)',
                   fontweight='bold', fontsize=10)
 axes[1].set_ylabel('Default Rate (%)')
 axes[1].tick_params(axis='x', rotation=0)
@@ -468,7 +259,7 @@ for i, v in enumerate(emp_dr.values):
 
 inc_dr = eda.groupby('income_group', observed=True)['TARGET'].mean() * 100
 inc_dr.plot(kind='bar', ax=axes[2], color=PALETTE['neutral'], edgecolor='white')
-axes[2].set_title('Default Rate by Income Group\n(9th strongest — correlation 0.023)',
+axes[2].set_title('Default Rate by Income Group\n(9th strongest — corr 0.023)',
                   fontweight='bold', fontsize=10)
 axes[2].set_ylabel('Default Rate (%)')
 axes[2].tick_params(axis='x', rotation=0)
@@ -481,7 +272,7 @@ plt.tight_layout()
 plt.savefig(f'{FIGURES}/01_top_predictors.png', dpi=150, bbox_inches='tight')
 plt.close()
 
-# Plot 2: Risk heatmap — age × employment (two strongest signals combined)
+# Plot 2: Risk heatmap
 pivot = (eda.groupby(['age_group', 'employment_group'], observed=True)['TARGET']
          .mean().unstack() * 100)
 plt.figure(figsize=(10, 6))
@@ -494,7 +285,7 @@ plt.tight_layout()
 plt.savefig(f'{FIGURES}/02_age_employment_heatmap.png', dpi=150, bbox_inches='tight')
 plt.close()
 
-# Plot 3: Behavioural features
+# Plot 3: Behavioural features (with NaN handling for matplotlib quirk)
 fig, axes = plt.subplots(2, 3, figsize=(16, 9))
 features = [
     ('inst_late_rate',     'Installment Late Rate (3rd strongest, corr=0.070)'),
@@ -507,9 +298,6 @@ features = [
 for ax, (feat, label) in zip(axes.flatten(), features):
     if feat in eda.columns:
         try:
-            # dropna() handles the matplotlib 3.10 + numpy 1.26 bin-broadcast quirk.
-            # density=False then normalising by max so plot still shows distribution shape
-            # without the histogram backend complaining about NaN-padded bin edges.
             v0 = eda.loc[eda['TARGET']==0, feat].dropna()
             v1 = eda.loc[eda['TARGET']==1, feat].dropna()
             ax.hist(v0, bins=40, alpha=0.6, color=PALETTE['safe'],
@@ -521,14 +309,19 @@ for ax, (feat, label) in zip(axes.flatten(), features):
         except Exception as e:
             log.warning(f"  Histogram skipped for {feat}: {e}")
             ax.set_visible(False)
+plt.suptitle('Behavioural Feature Distributions by Default Status',
+             fontweight='bold', fontsize=13, y=1.01)
+plt.tight_layout()
+plt.savefig(f'{FIGURES}/03_behavioral_distributions.png', dpi=150, bbox_inches='tight')
+plt.close()
+
 # Plot 4: Feature correlation ranking
 corr_cols = [c for c in eda.select_dtypes(include=[np.number]).columns if c != 'TARGET']
 top_corr = (eda[corr_cols + ['TARGET']].corr()['TARGET']
             .drop('TARGET').abs().nlargest(20).sort_values())
 plt.figure(figsize=(10, 7))
 top_corr.plot(kind='barh', color=PALETTE['accent'], edgecolor='white')
-plt.title('Top 20 Features by Correlation with Default\n'
-          'Age and CC Utilisation dominate — not income',
+plt.title('Top 20 Features by Correlation with Default',
           fontweight='bold')
 plt.xlabel('|Pearson Correlation with TARGET|')
 plt.tight_layout()
@@ -540,17 +333,6 @@ del eda; gc.collect()
 
 
 # ── MODEL TRAINING ────────────────────────────────────────────────────────────
-# Models chosen:
-#   Logistic Regression — interpretable baseline
-#   Random Forest — non-linear, robust to outliers
-#   XGBoost — strong on tabular data
-#   LightGBM — 3x faster than XGBoost, nearly identical AUC
-#
-# Removed: sklearn GradientBoostingClassifier.
-#   In actual run it achieved recall=0.0449 — refused to predict
-#   almost any defaults. 5x slower than LightGBM for worse results.
-#   No justification to keep it.
-
 models = {}
 
 log.info("  Training Logistic Regression...")
@@ -588,7 +370,7 @@ if XGBOOST_AVAILABLE:
     models['XGBoost'] = xgb_pipe
 
 if LGBM_AVAILABLE:
-    log.info("  Training LightGBM (primary model)...")
+    log.info("  Training LightGBM...")
     lgbm_pipe = Pipeline([
         ('imputer', SimpleImputer(strategy='median')),
         ('model',   LGBMClassifier(n_estimators=600, max_depth=7, learning_rate=0.03,
@@ -702,8 +484,6 @@ log.info(f"\n  Business lift: top 20% captures {lift:.1f}% of defaults ({lift/20
 
 
 # ── THRESHOLD SELECTION ───────────────────────────────────────────────────────
-# F-beta with beta=2.5 — a missed default costs ~8x more than a false alarm.
-# F1 treats them equally, which is wrong for credit decisions.
 log.info("  Selecting threshold (F-beta beta=2.5)...")
 
 thr_rows = []
@@ -791,24 +571,3 @@ log.info(f"  AUC-ROC           : {results[best_name]['AUC_ROC']}")
 log.info(f"  Decision threshold: {opt_thr} (F-beta β={DECISION_BETA})")
 log.info(f"  Business lift     : {lift:.1f}% of defaults in top 20% ({lift/20:.1f}x random)")
 log.info("=" * 65)
-
-
-# ── EXPERIMENTS TRIED AND REJECTED ────────────────────────────────────────────
-# 1. GradientBoostingClassifier — recall=0.0449 in actual run.
-#    Refused to predict almost any defaults. 5x slower than LightGBM.
-#    Removed with no regret.
-#
-# 2. INNER JOIN on secondary tables — first version.
-#    Dropped ~37,000 first-time borrowers. Recall fell 0.69 → 0.61.
-#    Switched to LEFT JOIN + median imputation.
-#
-# 3. income_credit_ratio as primary risk segment (for SQL).
-#    Actual correlation with default: 0.0018 (17th out of 19).
-#    SQL was rebuilt around age and employment_age_ratio instead.
-#
-# 4. F1-based threshold selection.
-#    F1 treats false negatives and false positives equally.
-#    A bank does not. Switched to F-beta beta=2.5.
-#
-# 5. SMOTE oversampling — AUC improved on train, degraded on val by 0.008.
-#    class_weight='balanced' was more effective and simpler.
