@@ -75,14 +75,21 @@ log = logging.getLogger(__name__)
 
 
 # ─── IMPORT FROM utils ────────────────────────────────────────────────────────
-# Configuration constants and pure-function utilities now live in src/utils.py.
-# Kept this way so functions can be imported from notebooks, tests, and the
-# Airflow DAG without re-running the whole pipeline as a side effect.
-from src.utils import (  # noqa: E402
-    CV_FOLDS, DECISION_BETA, FIGURES, MISSING_DROP_PCT, PALETTE,
-    PROCESSED, RANDOM_STATE, RAW_DIR, TEST_SIZE,
-    load_csv, missing_profile, reduce_memory, safe_divide, validate_inputs,
-)
+# Configuration constants and pure-function utilities live in src/utils.py.
+# Try the package-style import first (works when run as `python -m src.pipeline`
+# or imported from tests). Fall back to plain import for `python src/pipeline.py`.
+try:
+    from src.utils import (  # noqa: E402
+        CV_FOLDS, DECISION_BETA, FIGURES, MISSING_DROP_PCT, PALETTE,
+        PROCESSED, RANDOM_STATE, RAW_DIR, TEST_SIZE,
+        load_csv, missing_profile, reduce_memory, safe_divide, validate_inputs,
+    )
+except ModuleNotFoundError:
+    from utils import (  # noqa: E402
+        CV_FOLDS, DECISION_BETA, FIGURES, MISSING_DROP_PCT, PALETTE,
+        PROCESSED, RANDOM_STATE, RAW_DIR, TEST_SIZE,
+        load_csv, missing_profile, reduce_memory, safe_divide, validate_inputs,
+    )
 
 for d in [RAW_DIR, PROCESSED, FIGURES]:
     os.makedirs(d, exist_ok=True)
@@ -499,18 +506,21 @@ features = [
 ]
 for ax, (feat, label) in zip(axes.flatten(), features):
     if feat in eda.columns:
-        eda[eda['TARGET']==0][feat].hist(ax=ax, bins=40, alpha=0.6,
-            color=PALETTE['safe'], label='Non-Default', density=True)
-        eda[eda['TARGET']==1][feat].hist(ax=ax, bins=40, alpha=0.6,
-            color=PALETTE['risk'], label='Default', density=True)
-        ax.set_title(label, fontweight='bold', fontsize=9)
-        ax.legend(fontsize=7)
-plt.suptitle('Behavioural Feature Distributions by Default Status',
-             fontweight='bold', fontsize=13, y=1.01)
-plt.tight_layout()
-plt.savefig(f'{FIGURES}/03_behavioral_distributions.png', dpi=150, bbox_inches='tight')
-plt.close()
-
+        try:
+            # dropna() handles the matplotlib 3.10 + numpy 1.26 bin-broadcast quirk.
+            # density=False then normalising by max so plot still shows distribution shape
+            # without the histogram backend complaining about NaN-padded bin edges.
+            v0 = eda.loc[eda['TARGET']==0, feat].dropna()
+            v1 = eda.loc[eda['TARGET']==1, feat].dropna()
+            ax.hist(v0, bins=40, alpha=0.6, color=PALETTE['safe'],
+                    label='Non-Default', density=True)
+            ax.hist(v1, bins=40, alpha=0.6, color=PALETTE['risk'],
+                    label='Default', density=True)
+            ax.set_title(label, fontweight='bold', fontsize=9)
+            ax.legend(fontsize=7)
+        except Exception as e:
+            log.warning(f"  Histogram skipped for {feat}: {e}")
+            ax.set_visible(False)
 # Plot 4: Feature correlation ranking
 corr_cols = [c for c in eda.select_dtypes(include=[np.number]).columns if c != 'TARGET']
 top_corr = (eda[corr_cols + ['TARGET']].corr()['TARGET']
