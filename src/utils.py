@@ -106,15 +106,28 @@ def reduce_memory(df: pd.DataFrame) -> pd.DataFrame:
 def safe_divide(a, b, fill: float = 0):
     """Element-wise a/b, returning fill wherever b == 0.
 
+    Works for scalars, numpy arrays, and pandas Series. Avoids the
+    np.where eager-evaluation trap where ``a / b`` would raise before
+    np.where could pick the fill value.
+
     Args:
         a:    Numerator.
         b:    Denominator.
         fill: Value used when denominator is zero.
 
     Returns:
-        Array with zero-safe division results.
+        Same shape as inputs, with zero-safe division results.
     """
-    return np.where(b == 0, fill, a / b)
+    # numpy.divide with where= mask avoids evaluating a/b at the zero
+    # positions at all. out= gives the fill value its starting point.
+    a_arr = np.asarray(a, dtype=float)
+    b_arr = np.asarray(b, dtype=float)
+    out = np.full(np.broadcast(a_arr, b_arr).shape, fill, dtype=float)
+    np.divide(a_arr, b_arr, out=out, where=(b_arr != 0))
+    # If both inputs were scalars, return a scalar
+    if out.ndim == 0:
+        return out.item()
+    return out
 
 
 def validate_inputs() -> None:
