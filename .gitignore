@@ -2,3 +2,17 @@
 .venv/
 __pycache__/
 *.pyc
+baseline_checksums.txt
+# Data — never commit raw or processed data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Generated artifacts
+figures/*
+!figures/.gitkeep
+mlflow.db
+mlruns/
+*.pkl
+*.joblib
