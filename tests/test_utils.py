@@ -125,9 +125,13 @@ class TestReduceMemory:
         )
 
     def test_object_columns_untouched(self):
+        # String columns shouldn't be touched by reduce_memory. The exact
+        # dtype is fuzzy on newer pandas (object vs StringDtype), so check
+        # the values are preserved and the dtype isn't a numeric one.
         df = pd.DataFrame({"text": ["a", "b", "c"], "num": [1, 2, 3]})
         result = reduce_memory(df.copy())
-        assert result["text"].dtype == object
+        assert list(result["text"]) == ["a", "b", "c"]
+        assert not pd.api.types.is_numeric_dtype(result["text"])
 
 
 # ─── Configuration sanity ───────────────────────────────────────────────────
