@@ -1,5 +1,10 @@
 # Credit Risk Default — End-to-End Pipeline
 
+![CI](https://github.com/NADEEMTHEBA8/credit-risk-analysis/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+
 A multi-table data pipeline I built to learn what a real production-style data engineering project looks like, end to end. Ingests 8 raw tables from the [Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk) Kaggle dataset, aggregates them into a customer-level feature store in Postgres, and trains four models to score default risk.
 
 It's a learning project, but I tried to do everything the way I think it'd be done at a real company — separate modules per stage, Airflow DAG to orchestrate, data quality checks, tests, Docker, CI on every push. The point wasn't to win the Kaggle competition. The point was to build the whole thing properly.
@@ -92,7 +97,7 @@ Three things didn't go the way I expected, and they're the parts of the project 
 
 ## Project structure
 
-The code wasn't always laid out like this. I started with a single 924-line `pipeline.py` and refactored it into modules in two batches, verifying byte-identical output after each batch with SHA-256 checksums. The refactor journey is documented in `docs/REFACTOR_GUIDE.md`.
+The code wasn't always laid out like this. I started with a single 924-line `pipeline.py` and refactored it into modules in two batches, verifying byte-identical output after each batch with SHA-256 checksums.
 
 ## How to run it
 
@@ -130,7 +135,7 @@ make airflow-up
 
 ## What I'd do next if I had more time
 
-There's a `Future work` section in `docs/ARCHITECTURE.md` with the full list, but the three things I think about most:
+Three things I think about most:
 
 - Replace the pandas aggregations with Spark for the `bureau_balance` step. 27 million rows is enough that the next dataset size up would OOM.
 - Move the SQL transformations into dbt. The `UPDATE` block that fills in the segmentation columns is fine but it's imperative; dbt models would be versioned and testable.
@@ -144,6 +149,5 @@ The data is real and the dataset is famous, but the pipeline structure, refactor
 
 ## Author
 
-**Nadeem Theba** — Rajkot ,India
-[GitHub](https://github.com/NADEEMTHEBA8) ·
- [LinkedIn](linkedin.com/in/nadeem-theba-602862208)
+**Nadeem Theba** — Rajkot, India
+[GitHub](https://github.com/NADEEMTHEBA8) · [LinkedIn](https://linkedin.com/in/nadeem-theba-602862208)
