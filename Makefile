@@ -26,7 +26,7 @@ $(VENV)/bin/activate: requirements.txt
 	@touch $(VENV)/bin/activate
 
 run:  ## Run the full pipeline end-to-end
-	$(PY) -m src.pipeline
+	$(PY) -m src.main
 
 test:  ## Run pytest test suite
 	$(VENV)/bin/pytest tests/ -v
