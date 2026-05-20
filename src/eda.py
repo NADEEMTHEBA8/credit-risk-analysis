@@ -2,7 +2,7 @@
 Exploratory data analysis — saves 4 PNG figures to figures/ folder.
 
 This is exploration code by nature — one-off, plot-heavy, and not really
-reusable. Kept in its own module so pipeline.py and main.py don't get
+reusable. Kept in its own module so the main pipeline don't get
 cluttered with matplotlib boilerplate.
 """
 
