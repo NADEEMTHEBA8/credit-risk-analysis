@@ -18,11 +18,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing   import LabelEncoder
 from sklearn.utils           import class_weight
-
-try:
-    from src.utils import MISSING_DROP_PCT, RANDOM_STATE, TEST_SIZE, missing_profile, reduce_memory
-except ModuleNotFoundError:
-    from utils import MISSING_DROP_PCT, RANDOM_STATE, TEST_SIZE, missing_profile, reduce_memory
+from src.utils import MISSING_DROP_PCT, RANDOM_STATE, TEST_SIZE, missing_profile, reduce_memory  
 
 log = logging.getLogger(__name__)
 

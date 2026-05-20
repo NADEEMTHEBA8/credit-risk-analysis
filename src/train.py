@@ -29,11 +29,7 @@ from sklearn.metrics         import (
 from sklearn.model_selection import cross_val_score
 from sklearn.pipeline        import Pipeline
 from sklearn.preprocessing   import StandardScaler
-
-try:
-    from src.utils import CV_FOLDS, FIGURES, PALETTE, PROCESSED, RANDOM_STATE
-except ModuleNotFoundError:
-    from utils import CV_FOLDS, FIGURES, PALETTE, PROCESSED, RANDOM_STATE
+from src.utils import CV_FOLDS, FIGURES, PALETTE, PROCESSED, RANDOM_STATE
 
 try:
     from xgboost import XGBClassifier

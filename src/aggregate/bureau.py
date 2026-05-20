@@ -20,10 +20,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-try:
-    from src.utils import load_csv, reduce_memory
-except ModuleNotFoundError:
-    from utils import load_csv, reduce_memory
+from src.utils import load_csv, reduce_memory
 
 log = logging.getLogger(__name__)
 

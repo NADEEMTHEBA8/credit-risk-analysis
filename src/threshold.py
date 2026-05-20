@@ -17,10 +17,7 @@ import pandas as pd
 
 from sklearn.metrics import classification_report, fbeta_score
 
-try:
-    from src.utils import DECISION_BETA, FIGURES, PALETTE
-except ModuleNotFoundError:
-    from utils import DECISION_BETA, FIGURES, PALETTE
+from src.utils import DECISION_BETA, FIGURES, PALETTE
 
 log = logging.getLogger(__name__)
 

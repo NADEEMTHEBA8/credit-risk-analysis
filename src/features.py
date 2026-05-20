@@ -17,11 +17,7 @@ import logging
 
 import numpy as np
 import pandas as pd
-
-try:
-    from src.utils import safe_divide
-except ModuleNotFoundError:
-    from utils import safe_divide
+from src.utils import safe_divide
 
 log = logging.getLogger(__name__)
 
