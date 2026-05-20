@@ -1,9 +1,5 @@
 """
-Exploratory data analysis — saves 4 PNG figures to figures/ folder.
-
-This is exploration code by nature — one-off, plot-heavy, and not really
-reusable. Kept in its own module so the main pipeline don't get
-cluttered with matplotlib boilerplate.
+Exploratory data analysis — saves 4 PNG figures to figures/.
 """
 
 from __future__ import annotations
@@ -15,10 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-try:
-    from src.utils import FIGURES, PALETTE
-except ModuleNotFoundError:
-    from utils import FIGURES, PALETTE
+from src.utils import FIGURES, PALETTE
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +45,7 @@ def _plot_top_predictors(eda: pd.DataFrame) -> None:
     colors_age = [PALETTE['risk'] if v > 9 else PALETTE['neutral'] if v > 7
                   else PALETTE['safe'] for v in age_dr.values]
     age_dr.plot(kind='bar', ax=axes[0], color=colors_age, edgecolor='white')
-    axes[0].set_title('Default Rate by Age Group\n'
-                      '(Strongest behavioural predictor — corr 0.078)',
-                      fontweight='bold', fontsize=10)
+    axes[0].set_title('Default Rate by Age Group', fontweight='bold', fontsize=10)
     axes[0].set_ylabel('Default Rate (%)')
     axes[0].tick_params(axis='x', rotation=0)
     for i, v in enumerate(age_dr.values):
@@ -64,8 +55,7 @@ def _plot_top_predictors(eda: pd.DataFrame) -> None:
     colors_emp = [PALETTE['risk'] if v > 9 else PALETTE['neutral'] if v > 6
                   else PALETTE['safe'] for v in emp_dr.values]
     emp_dr.plot(kind='bar', ax=axes[1], color=colors_emp, edgecolor='white')
-    axes[1].set_title('Default Rate by Employment Stability\n'
-                      '(2nd strongest behavioural — corr 0.058)',
+    axes[1].set_title('Default Rate by Employment Stability',
                       fontweight='bold', fontsize=10)
     axes[1].set_ylabel('Default Rate (%)')
     axes[1].tick_params(axis='x', rotation=0)
@@ -74,14 +64,13 @@ def _plot_top_predictors(eda: pd.DataFrame) -> None:
 
     inc_dr = eda.groupby('income_group', observed=True)['TARGET'].mean() * 100
     inc_dr.plot(kind='bar', ax=axes[2], color=PALETTE['neutral'], edgecolor='white')
-    axes[2].set_title('Default Rate by Income Group\n(9th strongest — corr 0.023)',
-                      fontweight='bold', fontsize=10)
+    axes[2].set_title('Default Rate by Income Group', fontweight='bold', fontsize=10)
     axes[2].set_ylabel('Default Rate (%)')
     axes[2].tick_params(axis='x', rotation=0)
     for i, v in enumerate(inc_dr.values):
         axes[2].text(i, v + 0.1, f'{v:.1f}%', ha='center', fontsize=8)
 
-    plt.suptitle('Key Insight: Age and Employment Stability predict default better than Income',
+    plt.suptitle('Default Rate by Age, Employment Stability, and Income',
                  fontweight='bold', fontsize=12, y=1.02)
     plt.tight_layout()
     plt.savefig(f'{FIGURES}/01_top_predictors.png', dpi=150, bbox_inches='tight')
@@ -89,38 +78,34 @@ def _plot_top_predictors(eda: pd.DataFrame) -> None:
 
 
 def _plot_age_employment_heatmap(eda: pd.DataFrame) -> None:
-    """Figure 02 — interaction of two strongest behavioural predictors."""
+    """Figure 02 — interaction of age and employment stability."""
     pivot = (eda.groupby(['age_group', 'employment_group'], observed=True)['TARGET']
              .mean().unstack() * 100)
     plt.figure(figsize=(10, 6))
     sns.heatmap(pivot, annot=True, fmt='.1f', cmap='RdYlGn_r',
                 linewidths=0.5, cbar_kws={'label': 'Default Rate (%)'})
-    plt.title('Default Rate — Age × Employment Stability\n'
-              'Young + Unstable = 12.47% vs Old + Stable = 3.05%',
-              fontweight='bold')
+    plt.title('Default Rate — Age x Employment Stability', fontweight='bold')
     plt.tight_layout()
     plt.savefig(f'{FIGURES}/02_age_employment_heatmap.png', dpi=150, bbox_inches='tight')
     plt.close()
 
 
 def _plot_behavioural_distributions(eda: pd.DataFrame) -> None:
-    """Figure 03 — distribution overlays for top behavioural features.
-
-    dropna() and direct ax.hist() bypass the pandas/matplotlib bin-count
-    mismatch bug on matplotlib 3.10 + numpy 1.26.
-    """
+    """Figure 03 — distribution overlays for top behavioural features."""
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     features = [
-        ('inst_late_rate',     'Installment Late Rate (3rd strongest, corr=0.070)'),
-        ('cc_utilisation',     'CC Utilisation (2nd strongest, corr=0.075)'),
-        ('prev_approval_rate', 'Previous Approval Rate (5th strongest, corr=0.063)'),
-        ('bur_max_overdue',    'Bureau Max Overdue (13th, corr=0.009)'),
+        ('inst_late_rate',     'Installment Late Rate'),
+        ('cc_utilisation',     'CC Utilisation'),
+        ('prev_approval_rate', 'Previous Approval Rate'),
+        ('bur_max_overdue',    'Bureau Max Overdue'),
         ('pos_sk_dpd_mean',    'POS Avg DPD'),
         ('inst_days_late_mean','Avg Days Late per Payment'),
     ]
     for ax, (feat, label) in zip(axes.flatten(), features):
         if feat in eda.columns:
             try:
+                # hist() on dropna'd values directly — avoids a NaN-handling
+                # issue with the pandas .plot() histogram path
                 v0 = eda.loc[eda['TARGET'] == 0, feat].dropna()
                 v1 = eda.loc[eda['TARGET'] == 1, feat].dropna()
                 ax.hist(v0, bins=40, alpha=0.6, color=PALETTE['safe'],
