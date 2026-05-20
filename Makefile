@@ -32,7 +32,7 @@ test:  ## Run pytest test suite
 	$(VENV)/bin/pytest tests/ -v
 
 lint:  ## Run ruff linter (if installed)
-	$(VENV)/bin/ruff check src/ tests/ dags/ 2>/dev/null || echo "ruff not installed - skipping"
+	$(VENV)/bin/ruff check src/ tests/ 2>/dev/null || echo "ruff not installed - skipping"
 
 clean:  ## Remove generated files and caches
 	rm -rf __pycache__ .pytest_cache .ruff_cache .coverage htmlcov
