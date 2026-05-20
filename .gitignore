@@ -2,7 +2,13 @@
 .venv/
 __pycache__/
 *.pyc
-baseline_checksums.txt
+
+# Local artifacts
+mlflow.db
+mlruns/
+**/.DS_Store
+.ipynb_checkpoints/
+
 # Data — never commit raw or processed data
 data/raw/*
 !data/raw/.gitkeep
@@ -12,7 +18,5 @@ data/processed/*
 # Generated artifacts
 figures/*
 !figures/.gitkeep
-mlflow.db
-mlruns/
 *.pkl
 *.joblib
