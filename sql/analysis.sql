@@ -1,43 +1,30 @@
 -- ================================================================
 -- Home Credit Default Risk — SQL Analysis
 -- Database  : PostgreSQL 14+
--- Source    : credit_data_sql.csv (307,511 rows, 20 columns)
+-- Source    : credit_data_sql.csv (one row per customer)
 -- ================================================================
--- Built after analysing the actual output data from the Python pipeline.
+-- Customer-level risk analysis on the output of the Python pipeline.
+-- The analysis is organised around age, employment stability, and
+-- payment behaviour, which the pipeline's feature analysis found to be
+-- the most useful signals. Income-to-credit ratio looked promising but
+-- turned out weak, so it is not used as a primary segmentation basis.
 --
--- KEY FINDING that shaped this file:
---   income_credit_ratio is the 17th strongest predictor of default
---   (Pearson correlation = 0.0018). The earlier SQL version used it
---   as the primary segmentation basis — that was wrong.
---
---   Actual top predictors from the data:
---     1. DAYS_BIRTH (age)          corr = 0.078  range: 4.9% to 11.5%
---     2. cc_utilisation            corr = 0.075  over-limit = 25.9%
---     3. inst_late_rate            corr = 0.070  range: 6.8% to 16.4%
---     4. DAYS_EMPLOYED             corr = 0.064
---     5. prev_approval_rate        corr = 0.063  refused = 11.1%
---     6. employment_age_ratio      corr = 0.058  range: 3.1% to 10.5%
---    17. income_credit_ratio       corr = 0.002  range: 6.6% to 8.8%
---
---   The SQL analysis is structured around what the data actually shows,
---   not what we assumed before running the pipeline.
---
--- KNOWN DATA QUIRKS (from analysis):
---   bur_total_debt can be negative (customer overpaid a loan)
---   cc_utilisation can exceed 1.0 (customer is over credit limit)
---   inst_days_late_mean can be negative (customer paid early)
+-- KNOWN DATA QUIRKS (not errors):
+--   bur_total_debt can be negative      — customer overpaid a loan
+--   cc_utilisation can exceed 1.0       — customer is over credit limit
+--   inst_days_late_mean can be negative — customer paid early
 --
 -- RUN ORDER:
---   (1) Schema setup block   — creates table and indexes
---   (2) Import CSV            — right-click table → Import/Export
---   (3) Segmentation block   — adds and fills 5 label columns
---   (4) Analysis queries     — run one block at a time, press F5
+--   (1) Schema setup block   — creates the table
+--   (2) Import CSV            — right-click table -> Import/Export
+--   (3) Segmentation block   — adds and fills the label columns
+--   (4) Analysis queries     — run one block at a time
 -- ================================================================
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- SCHEMA SETUP
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 DROP TABLE IF EXISTS application CASCADE;
 
@@ -51,29 +38,24 @@ CREATE TABLE application (
     days_employed          NUMERIC,   -- Employment days (positive; NULL = unemployed)
 
     -- Engineered ratios from the Python pipeline
-    -- Note: income_credit_ratio has very low correlation (0.002) with default.
-    -- It is kept here for completeness but is not the primary analysis signal.
-    income_credit_ratio    NUMERIC,   -- income / credit — expected to be strong, was not
-    employment_age_ratio   NUMERIC,   -- employed_days / birth_days — 6th strongest (0.058)
+    income_credit_ratio    NUMERIC,   -- income / credit — weak signal, kept for completeness
+    employment_age_ratio   NUMERIC,   -- employed_days / birth_days
     annuity_income_ratio   NUMERIC,   -- monthly payment / income
 
     -- Bureau signals (from bureau.csv + bureau_balance.csv)
-    -- bur_total_debt can be negative due to overpayments — this is not an error.
     bur_total_debt         NUMERIC,   -- total outstanding debt at other banks (can be negative)
     bur_num_credits        NUMERIC,   -- count of past bureau credits
-    bur_max_overdue        NUMERIC,   -- largest overdue amount; even one matters (16.2% default)
+    bur_max_overdue        NUMERIC,   -- largest overdue amount
 
     -- Previous application signals
     prev_num_applications  NUMERIC,   -- total past Home Credit applications
-    prev_approval_rate     NUMERIC,   -- fraction approved; 0-0.5 = 11.1% default rate
+    prev_approval_rate     NUMERIC,   -- fraction approved
 
-    -- Installment payment behaviour — 3rd strongest signal (corr=0.070)
-    inst_late_rate         NUMERIC,   -- fraction of payments made late (0 to 0.75 in data)
+    -- Installment payment behaviour
+    inst_late_rate         NUMERIC,   -- fraction of payments made late
     inst_days_late_mean    NUMERIC,   -- avg days late per payment (negative = paid early)
 
-    -- Credit card signals — 2nd strongest (corr=0.075)
-    -- cc_utilisation can exceed 1.0 when customer is over credit limit.
-    -- Over-limit customers have 25.9% default rate vs 8.3% for normal users.
+    -- Credit card signals
     cc_utilisation         NUMERIC,   -- balance / limit; can exceed 1.0
     cc_dpd_max             NUMERIC,   -- worst DPD event on credit card
 
@@ -84,25 +66,14 @@ CREATE TABLE application (
     target                 NUMERIC    -- 1 = defaulted, 0 = repaid
 );
 
--- Index on strongest predictors and common filter columns
-CREATE INDEX idx_days_birth     ON application(days_birth);        -- strongest predictor
-CREATE INDEX idx_cc_util        ON application(cc_utilisation);    -- 2nd strongest
-CREATE INDEX idx_inst_late      ON application(inst_late_rate);    -- 3rd strongest
-CREATE INDEX idx_emp_ratio      ON application(employment_age_ratio);
-CREATE INDEX idx_prev_approval  ON application(prev_approval_rate);
-CREATE INDEX idx_target         ON application(target);
-CREATE INDEX idx_income         ON application(amt_income_total);
-CREATE INDEX idx_credit         ON application(amt_credit);
-
 -- After running this block, import credit_data_sql.csv:
---   Right-click "application" in left panel → Import/Export Data
+--   Right-click "application" in left panel -> Import/Export Data
 --   Format: csv | Header: ON | Delimiter: ,
---   Expected: "Successfully completed. 307511 rows"
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- SEGMENTATION SETUP
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 ALTER TABLE application
     ADD COLUMN IF NOT EXISTS income_group      VARCHAR(20),
@@ -111,9 +82,9 @@ ALTER TABLE application
     ADD COLUMN IF NOT EXISTS age_group         VARCHAR(10),
     ADD COLUMN IF NOT EXISTS risk_level        VARCHAR(20);
 
--- Single UPDATE pass — one table scan fills all 5 columns.
+-- Single UPDATE pass fills all 5 columns.
 -- Thresholds match the Python pipeline pd.cut bins exactly so
--- SQL and Python segment assignments are always identical.
+-- SQL and Python segment assignments stay identical.
 UPDATE application SET
 
     income_group = CASE
@@ -128,9 +99,8 @@ UPDATE application SET
         ELSE                           'Large'
     END,
 
-    -- employment_age_ratio = days_employed / days_birth
-    -- Unstable (<0.1): 10.5% default rate
-    -- Stable   (>0.6): 3.1% default rate — 3.5x difference
+    -- employment_age_ratio = days_employed / days_birth.
+    -- More stable employment generally means lower default risk.
     employment_group = CASE
         WHEN employment_age_ratio IS NULL
           OR employment_age_ratio < 0.1  THEN 'Unstable'
@@ -139,8 +109,8 @@ UPDATE application SET
         ELSE                                  'Stable'
     END,
 
-    -- Age group. Days_birth / 365 = age in years.
-    -- 18-29: 11.5% default rate vs 60+: 4.9% — strongest single predictor.
+    -- Age group. days_birth / 365 = age in years.
+    -- Younger customers tend to default more often.
     age_group = CASE
         WHEN (days_birth / 365) < 30  THEN '18-29'
         WHEN (days_birth / 365) < 40  THEN '30-39'
@@ -149,19 +119,14 @@ UPDATE application SET
         ELSE                               '60+'
     END,
 
-    -- income_credit_ratio segments kept for compatibility with pipeline naming.
-    -- Note: actual default rates across these bands are nearly flat (6.6% to 8.8%).
-    -- Do not use risk_level alone as a risk signal — use age/employment instead.
+    -- risk_level kept for compatibility with pipeline naming.
+    -- Default rates across these bands are nearly flat — do not use
+    -- risk_level alone as a risk signal; prefer age/employment.
     risk_level = CASE
         WHEN income_credit_ratio < 0.3  THEN 'High Risk'
         WHEN income_credit_ratio < 0.6  THEN 'Medium Risk'
         ELSE                                 'Low Risk'
     END;
-
-CREATE INDEX IF NOT EXISTS idx_income_group ON application(income_group);
-CREATE INDEX IF NOT EXISTS idx_age_group    ON application(age_group);
-CREATE INDEX IF NOT EXISTS idx_emp_group    ON application(employment_group);
-CREATE INDEX IF NOT EXISTS idx_risk_level   ON application(risk_level);
 
 -- Quick verify after UPDATE
 SELECT age_group, employment_group,
@@ -171,26 +136,25 @@ FROM application
 GROUP BY age_group, employment_group
 ORDER BY default_rate_pct DESC
 LIMIT 5;
--- Expected top rows: 18-29 / Unstable ~12.5%, 30-39 / Unstable ~11.9%
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- DATA VERIFICATION
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 SELECT
-    COUNT(*)                                      AS total_rows,        -- expect 307511
-    SUM(target)                                   AS total_defaults,    -- expect ~24825
-    ROUND(AVG(target) * 100::NUMERIC, 2)          AS default_rate_pct, -- expect 8.07
-    ROUND(AVG(bur_total_debt)::NUMERIC, 0)        AS avg_bureau_debt,  -- note: can be negative
-    COUNT(*) FILTER (WHERE bur_total_debt < 0)    AS negative_debt_rows, -- ~1296 expected
-    COUNT(*) FILTER (WHERE cc_utilisation > 1.0)  AS over_limit_rows     -- ~1042 expected
+    COUNT(*)                                      AS total_rows,
+    SUM(target)                                   AS total_defaults,
+    ROUND(AVG(target) * 100::NUMERIC, 2)          AS default_rate_pct,
+    ROUND(AVG(bur_total_debt)::NUMERIC, 0)        AS avg_bureau_debt,
+    COUNT(*) FILTER (WHERE bur_total_debt < 0)    AS negative_debt_rows,
+    COUNT(*) FILTER (WHERE cc_utilisation > 1.0)  AS over_limit_rows
 FROM application;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- PORTFOLIO KPI OVERVIEW
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 SELECT
     COUNT(*)                                           AS total_customers,
@@ -206,11 +170,11 @@ SELECT
 FROM application;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- PRIMARY ANALYSIS: AGE GROUP
--- Strongest predictor — correlation 0.078 with default.
--- Default rate drops from 11.5% (18-29) to 4.9% (60+).
--- ════════════════════════════════════════════════════════════════
+-- Age is one of the clearest signals in the data — default rates
+-- fall steadily as customers get older.
+-- ================================================================
 
 SELECT
     age_group,
@@ -228,11 +192,11 @@ GROUP BY age_group
 ORDER BY default_rate_pct DESC;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- PRIMARY ANALYSIS: EMPLOYMENT STABILITY
--- 6th strongest — but shows 3.5x range (3.1% to 10.5%).
--- Combined with age, this gives the best segmentation in the dataset.
--- ════════════════════════════════════════════════════════════════
+-- Employment stability separates the portfolio well, and combined
+-- with age it gives the most useful segmentation in the dataset.
+-- ================================================================
 
 SELECT
     employment_group,
@@ -247,11 +211,11 @@ GROUP BY employment_group
 ORDER BY default_rate_pct DESC;
 
 
--- ════════════════════════════════════════════════════════════════
--- KEY FINDING: AGE × EMPLOYMENT COMBINED
--- These two features together produce the widest default rate range
--- in the entire dataset: 3.05% (Stable + 60+) to 12.47% (Unstable + 18-29).
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
+-- AGE x EMPLOYMENT COMBINED
+-- These two together produce the widest spread in default rate
+-- of any segmentation tried here.
+-- ================================================================
 
 SELECT
     age_group,
@@ -262,15 +226,15 @@ SELECT
     ROUND(AVG(inst_late_rate)::NUMERIC, 4)         AS avg_late_rate
 FROM application
 GROUP BY age_group, employment_group
-HAVING COUNT(*) > 500       -- minimum sample for statistical reliability
+HAVING COUNT(*) > 500       -- minimum sample for a reliable rate
 ORDER BY default_rate_pct DESC;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- PAYMENT BEHAVIOUR ANALYSIS
--- inst_late_rate: 3rd strongest predictor (corr = 0.070).
--- "Usually Late" (>50%) has 16.4% default rate — 2.4x portfolio average.
--- ════════════════════════════════════════════════════════════════
+-- Installment late rate is one of the stronger behavioural signals —
+-- customers who are usually late default well above portfolio average.
+-- ================================================================
 
 WITH pay_segments AS (
     SELECT target, amt_income_total, employment_age_ratio,
@@ -294,15 +258,14 @@ SELECT
 FROM pay_segments
 GROUP BY payment_segment
 ORDER BY payment_segment;
--- Expected: monotonic increase from "Always On Time" (6.8%) to "Usually Late" (16.4%)
+-- Default rate should rise steadily from "Always On Time" to "Usually Late".
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- CREDIT CARD UTILISATION ANALYSIS
--- 2nd strongest predictor (corr = 0.075).
--- Customers OVER their credit limit (util > 1.0) have 25.9% default rate.
--- This is the single highest default rate of any segment in this analysis.
--- ════════════════════════════════════════════════════════════════
+-- Utilisation tracks default risk closely. Customers over their
+-- credit limit are the highest-risk segment in this analysis.
+-- ================================================================
 
 WITH cc_segments AS (
     SELECT target,
@@ -313,7 +276,7 @@ WITH cc_segments AS (
             WHEN cc_utilisation < 0.60     THEN '4. Moderate     (30-60%)'
             WHEN cc_utilisation < 0.90     THEN '5. High         (60-90%)'
             WHEN cc_utilisation <= 1.0     THEN '6. Near-Limit   (90-100%)'
-            ELSE                                '7. OVER LIMIT   (>100%)'  -- 25.9% default rate
+            ELSE                                '7. OVER LIMIT   (>100%)'
         END AS cc_segment
     FROM application
 )
@@ -327,13 +290,12 @@ GROUP BY cc_segment
 ORDER BY cc_segment;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- PREVIOUS APPLICATION HISTORY
--- 5th strongest predictor (corr = 0.063).
--- "Mostly Refused" bucket (0-50% approval) has 11.1% default rate.
--- Note: "Always Refused" (approval_rate=0) only has 8.7% — the
--- bucket with 0-50% approval is actually riskier than 0%.
--- ════════════════════════════════════════════════════════════════
+-- Approval history on past applications carries some signal.
+-- Worth noting: the "Mostly Refused" bucket comes out riskier than
+-- "Always Refused" — the mixed-history group is not the safest.
+-- ================================================================
 
 WITH prev_segments AS (
     SELECT target,
@@ -342,8 +304,8 @@ WITH prev_segments AS (
               OR prev_num_applications = 0    THEN '1. First-Time Applicant'
             WHEN prev_approval_rate >= 0.9    THEN '2. Mostly Approved (>90%)'
             WHEN prev_approval_rate >= 0.5    THEN '3. Mixed (50-90%)'
-            WHEN prev_approval_rate > 0       THEN '4. Mostly Refused (1-50%)'  -- 11.1% rate
-            ELSE                                   '5. Always Refused (0%)'     -- 8.7% rate
+            WHEN prev_approval_rate > 0       THEN '4. Mostly Refused (1-50%)'
+            ELSE                                   '5. Always Refused (0%)'
         END AS prev_segment
     FROM application
 )
@@ -357,19 +319,19 @@ GROUP BY prev_segment
 ORDER BY prev_segment;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- BUREAU HISTORY IMPACT
--- bur_max_overdue > 0: 16.2% default rate (vs 8.0% clean)
--- Note: bur_total_debt can be negative (customer overpaid).
---       GREATEST(bur_total_debt, 0) used where debt amount is needed.
--- ════════════════════════════════════════════════════════════════
+-- Any recorded overdue at another bank is a clear risk marker.
+-- Note: bur_total_debt can be negative (overpayment), so
+-- GREATEST(bur_total_debt, 0) is used where a debt amount is needed.
+-- ================================================================
 
 WITH bureau_segments AS (
     SELECT target, amt_income_total,
         CASE
             WHEN bur_num_credits IS NULL
               OR bur_num_credits = 0    THEN '1. No Bureau History'
-            WHEN bur_max_overdue > 0    THEN '2. Has Overdue at Other Banks'  -- 16.2%
+            WHEN bur_max_overdue > 0    THEN '2. Has Overdue at Other Banks'
             ELSE                             '3. Clean Bureau Record'
         END AS bureau_segment
     FROM application
@@ -385,12 +347,11 @@ GROUP BY bureau_segment
 ORDER BY default_rate_pct DESC;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- INCOME GROUP (WEAK SIGNAL — SHOWN FOR COMPLETENESS)
--- Default rates: Low=8.2%, Medium=8.6%, High=7.1%.
--- Range is only 1.5 percentage points.
--- Income alone is a poor predictor of default.
--- ════════════════════════════════════════════════════════════════
+-- Default rates are nearly flat across income groups. Income alone
+-- is a poor predictor — included mainly as a contrast to age.
+-- ================================================================
 
 WITH income_summary AS (
     SELECT
@@ -408,16 +369,15 @@ SELECT *,
     ROUND(customers * 100.0 / SUM(customers) OVER ()::NUMERIC, 2) AS pct_of_portfolio
 FROM income_summary
 ORDER BY default_rate_pct DESC;
--- Expected: very flat rates (~7-9%) across all groups.
--- Compare to age groups (4.9% to 11.5%) to see why income is a weaker signal.
+-- Compare the spread here against the age groups to see why income
+-- is treated as a weaker signal.
 
 
--- ════════════════════════════════════════════════════════════════
--- NTILE RISK BUCKETS — BY AGE (STRONGEST PREDICTOR)
--- Using DAYS_BIRTH instead of income_credit_ratio because age
--- has 44x higher correlation with default.
--- Higher bucket number = older = lower risk.
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
+-- NTILE RISK BUCKETS — BY AGE
+-- Five equal buckets ordered youngest to oldest.
+-- Bucket 1 = youngest = highest risk.
+-- ================================================================
 
 WITH age_buckets AS (
     SELECT
@@ -452,10 +412,11 @@ GROUP BY age_bucket
 ORDER BY age_bucket;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- DEFAULTER vs NON-DEFAULTER SIDE-BY-SIDE PROFILE
--- PERCENTILE_CONT(0.5) = exact median (robust to skewed income data).
--- ════════════════════════════════════════════════════════════════
+-- Median via PERCENTILE_CONT alongside the averages, since income
+-- is skewed and the mean alone can mislead.
+-- ================================================================
 
 SELECT
     CASE WHEN target = 1 THEN 'Defaulted' ELSE 'Non-Default' END  AS customer_type,
@@ -479,11 +440,11 @@ GROUP BY target
 ORDER BY target;
 
 
--- ════════════════════════════════════════════════════════════════
--- 3-WAY RISK MATRIX: AGE × EMPLOYMENT × PAYMENT BEHAVIOUR
--- Using the three strongest independent signals.
--- HAVING COUNT(*) > 500 removes unreliable small segments.
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
+-- 3-WAY RISK MATRIX: AGE x EMPLOYMENT x PAYMENT BEHAVIOUR
+-- Crossing the three signals that segment the portfolio best.
+-- HAVING COUNT(*) > 500 drops segments too small to read into.
+-- ================================================================
 
 WITH pay_flag AS (
     SELECT *,
@@ -508,14 +469,11 @@ ORDER BY default_rate_pct DESC
 LIMIT 15;
 
 
--- ════════════════════════════════════════════════════════════════
--- CUSTOMER RANKING — PARTITION BY + MULTIPLE WINDOW FUNCTIONS
--- RANK() OVER (ORDER BY ...)              — global rank
--- RANK() OVER (PARTITION BY ... ORDER BY) — rank within group
--- PERCENT_RANK() * 100                    — normalised score 0-100
---
--- Ranking by days_birth ASC (youngest = riskiest = rank 1)
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
+-- CUSTOMER RANKING — WINDOW FUNCTIONS
+-- Global rank, rank within employment group, and a 0-100 percentile.
+-- Ranked by days_birth ASC, so youngest customers rank first.
+-- ================================================================
 
 SELECT
     ROUND(days_birth / 365.0, 1)                     AS age_years,
@@ -525,14 +483,12 @@ SELECT
     target,
     age_group,
     employment_group,
-    -- Youngest customer globally = rank 1
     RANK() OVER (ORDER BY days_birth ASC)            AS global_age_rank,
-    -- Youngest within each employment group
     RANK() OVER (
         PARTITION BY employment_group
         ORDER BY days_birth ASC
     )                                                AS age_rank_in_emp_group,
-    -- Percentile: 0 = oldest (safest), 100 = youngest (riskiest)
+    -- 0 = oldest (safest), 100 = youngest (riskiest)
     ROUND(
         (PERCENT_RANK() OVER (ORDER BY days_birth ASC) * 100)::NUMERIC
     , 2)                                             AS youth_risk_percentile
@@ -541,10 +497,10 @@ ORDER BY days_birth ASC
 LIMIT 20;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- DECILE ANALYSIS — BY EMPLOYMENT STABILITY
 -- 10 equal groups; decile 1 = most unstable = highest risk.
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 WITH deciles AS (
     SELECT
@@ -569,11 +525,10 @@ GROUP BY decile
 ORDER BY decile;
 
 
--- ════════════════════════════════════════════════════════════════
--- SCALAR SUBQUERY — CUSTOMERS BELOW AVERAGE AGE
--- Younger than average = higher risk group.
--- Inner SELECT runs once, outer query compares each row to it.
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
+-- CUSTOMERS BELOW AVERAGE AGE
+-- Younger-than-average customers, as a higher-risk slice to inspect.
+-- ================================================================
 
 SELECT
     ROUND(days_birth / 365.0, 1)              AS age_years,
@@ -584,21 +539,22 @@ SELECT
     age_group,
     employment_group
 FROM application
-WHERE days_birth < (SELECT AVG(days_birth) FROM application)  -- younger than average
+WHERE days_birth < (SELECT AVG(days_birth) FROM application)
 ORDER BY days_birth ASC
 LIMIT 20;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- COMPOSITE RISK SCORE
--- Three CTEs required because window functions cannot appear
--- in GROUP BY directly (computed in final_bands CTE, then grouped).
+-- Built in three CTEs: per-signal quintiles, then a weighted score,
+-- then a final risk band. The score has to be computed in its own
+-- CTE before NTILE can band it, since a window result cannot be
+-- used directly in GROUP BY.
 --
--- Weights updated based on actual correlation analysis:
---   Old (wrong): income_credit_ratio 50%, late_rate 30%, cc_util 20%
---   New (correct): age 30%, late_rate 30%, cc_util 25%, employment 15%
---   income_credit_ratio excluded — correlation too weak to include.
--- ════════════════════════════════════════════════════════════════
+-- Weights roughly reflect how useful each signal looked in the
+-- pipeline's feature analysis. income_credit_ratio is left out —
+-- it was too weak to contribute.
+-- ================================================================
 
 WITH signals AS (
     SELECT
@@ -608,7 +564,6 @@ WITH signals AS (
         cc_utilisation,
         employment_age_ratio,
         -- NTILE quintile per signal: 5 = worst, 1 = best
-        -- Age: younger (lower days_birth) = higher risk = higher quintile
         NTILE(5) OVER (ORDER BY days_birth ASC)                            AS q_age,
         NTILE(5) OVER (ORDER BY COALESCE(inst_late_rate,  0) DESC)         AS q_late_rate,
         NTILE(5) OVER (ORDER BY COALESCE(cc_utilisation,  0) DESC)         AS q_cc_util,
@@ -619,15 +574,15 @@ WITH signals AS (
 composite AS (
     SELECT *,
         ROUND(
-            (q_age        * 0.30) +   -- age: strongest predictor, corr=0.078
-            (q_late_rate  * 0.30) +   -- payment behaviour, corr=0.070
-            (q_cc_util    * 0.25) +   -- cc utilisation, corr=0.075
-            (q_employment * 0.15)     -- employment stability, corr=0.058
+            (q_age        * 0.30) +   -- age
+            (q_late_rate  * 0.30) +   -- payment behaviour
+            (q_cc_util    * 0.25) +   -- cc utilisation
+            (q_employment * 0.15)     -- employment stability
         , 2) AS composite_score
     FROM signals
 ),
 final_bands AS (
-    -- Must be a separate CTE so NTILE result can be used in GROUP BY
+    -- Separate CTE so the NTILE result can be used in GROUP BY
     SELECT *,
         NTILE(5) OVER (ORDER BY composite_score DESC) AS final_risk_band
     FROM composite
@@ -646,11 +601,10 @@ GROUP BY final_risk_band
 ORDER BY final_risk_band;
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- STORED FUNCTION — FLEXIBLE SEGMENT LOOKUP
--- NULL parameter = no filter on that dimension.
--- Named parameter syntax (=>) lets callers skip optional params.
--- ════════════════════════════════════════════════════════════════
+-- Pass NULL for any dimension to leave it unfiltered.
+-- ================================================================
 
 CREATE OR REPLACE FUNCTION get_risk_profile(
     p_age_group        VARCHAR DEFAULT NULL,
@@ -694,16 +648,16 @@ END;
 $$;
 
 -- Usage examples
-SELECT * FROM get_risk_profile();                                              -- all segments
-SELECT * FROM get_risk_profile(p_age_group => '18-29');                        -- youngest only
+SELECT * FROM get_risk_profile();
+SELECT * FROM get_risk_profile(p_age_group => '18-29');
 SELECT * FROM get_risk_profile(p_age_group => '18-29',
-                               p_employment_group => 'Unstable');              -- highest risk combo
-SELECT * FROM get_risk_profile(p_employment_group => 'Stable');                -- most stable
+                               p_employment_group => 'Unstable');
+SELECT * FROM get_risk_profile(p_employment_group => 'Stable');
 
 
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- REUSABLE VIEW FOR DASHBOARDS
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 CREATE OR REPLACE VIEW vw_risk_summary AS
 SELECT
@@ -724,24 +678,9 @@ GROUP BY age_group, employment_group, income_group;
 SELECT * FROM vw_risk_summary ORDER BY default_rate_pct DESC;
 
 
--- ════════════════════════════════════════════════════════════════
--- EXPLAIN ANALYZE — QUERY PERFORMANCE
--- ════════════════════════════════════════════════════════════════
-
-EXPLAIN ANALYZE
-SELECT
-    age_group,
-    employment_group,
-    ROUND(AVG(target) * 100::NUMERIC, 2)           AS default_rate_pct,
-    ROUND(AVG(inst_late_rate)::NUMERIC, 4)         AS avg_late_rate
-FROM application
-WHERE employment_age_ratio < 0.1    -- Unstable segment
-GROUP BY age_group, employment_group;
-
-
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 -- DATA QUALITY CHECKS
--- ════════════════════════════════════════════════════════════════
+-- ================================================================
 
 SELECT
     COUNT(*) FILTER (WHERE amt_income_total       IS NULL) AS null_income,
@@ -756,22 +695,22 @@ SELECT
     COUNT(*) FILTER (WHERE employment_group       IS NULL) AS null_emp_group
 FROM application;
 
--- Known data quirks — these are NOT errors
+-- Known data quirks — these are expected, not errors
 SELECT
-    COUNT(*) FILTER (WHERE bur_total_debt < 0)       AS negative_bureau_debt,  -- ~1296 (overpayments)
-    COUNT(*) FILTER (WHERE cc_utilisation > 1.0)     AS over_credit_limit,     -- ~1042 (25.9% default rate)
-    COUNT(*) FILTER (WHERE inst_days_late_mean < 0)  AS paid_early_customers,  -- negative = paid early
-    MIN(inst_days_late_mean)                          AS earliest_payment_days  -- most early payers
+    COUNT(*) FILTER (WHERE bur_total_debt < 0)       AS negative_bureau_debt,   -- overpayments
+    COUNT(*) FILTER (WHERE cc_utilisation > 1.0)     AS over_credit_limit,      -- over credit limit
+    COUNT(*) FILTER (WHERE inst_days_late_mean < 0)  AS paid_early_customers,   -- negative = paid early
+    MIN(inst_days_late_mean)                          AS earliest_payment_days
 FROM application;
 
 -- Value range sanity check
 SELECT
-    MIN(target)                AS min_target,   -- must be 0
-    MAX(target)                AS max_target,   -- must be 1
-    MIN(days_birth / 365.0)    AS youngest_yrs, -- expect ~21
-    MAX(days_birth / 365.0)    AS oldest_yrs,   -- expect ~69
-    MIN(inst_late_rate)        AS min_late,     -- must be 0
-    MAX(inst_late_rate)        AS max_late,     -- expect <= 1
-    MIN(cc_utilisation)        AS min_cc_util,  -- must be >= 0
-    MAX(cc_utilisation)        AS max_cc_util   -- can exceed 1.0
+    MIN(target)                AS min_target,   -- expect 0
+    MAX(target)                AS max_target,   -- expect 1
+    MIN(days_birth / 365.0)    AS youngest_yrs,
+    MAX(days_birth / 365.0)    AS oldest_yrs,
+    MIN(inst_late_rate)        AS min_late,     -- expect 0
+    MAX(inst_late_rate)        AS max_late,
+    MIN(cc_utilisation)        AS min_cc_util,  -- expect >= 0
+    MAX(cc_utilisation)        AS max_cc_util
 FROM application;

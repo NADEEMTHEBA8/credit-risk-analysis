@@ -104,14 +104,23 @@ def _plot_behavioural_distributions(eda: pd.DataFrame) -> None:
     for ax, (feat, label) in zip(axes.flatten(), features):
         if feat in eda.columns:
             try:
-                # hist() on dropna'd values directly — avoids a NaN-handling
-                # issue with the pandas .plot() histogram path
                 v0 = eda.loc[eda['TARGET'] == 0, feat].dropna()
                 v1 = eda.loc[eda['TARGET'] == 1, feat].dropna()
-                ax.hist(v0, bins=40, alpha=0.6, color=PALETTE['safe'],
-                        label='Non-Default', density=True)
-                ax.hist(v1, bins=40, alpha=0.6, color=PALETTE['risk'],
-                        label='Default', density=True)
+                combined = pd.concat([v0, v1])
+                # clip the long right tail at the 99th percentile — a few
+                # features (overdue amounts, DPD) have extreme outliers that
+                # otherwise push all the mass into the first bin
+                lower = combined.min()
+                upper = combined.quantile(0.99)
+                if upper <= lower:          # near-constant column
+                    upper = combined.max()
+                # shared bin edges so both histograms align
+                bin_edges = np.histogram_bin_edges(combined, bins=40,
+                                                   range=(lower, upper))
+                ax.hist(v0.clip(lower, upper), bins=bin_edges, alpha=0.6,
+                        color=PALETTE['safe'], label='Non-Default', density=True)
+                ax.hist(v1.clip(lower, upper), bins=bin_edges, alpha=0.6,
+                        color=PALETTE['risk'], label='Default', density=True)
                 ax.set_title(label, fontweight='bold', fontsize=9)
                 ax.legend(fontsize=7)
             except Exception as e:

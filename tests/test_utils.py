@@ -1,10 +1,8 @@
 """
 Unit tests for src/utils.py.
 
-These are deliberately small and focused. The goal isn't 100% coverage
-of the whole pipeline — it's to prove the pure-function helpers behave
-correctly on edge cases. The pipeline itself is integration-tested
-indirectly through the SHA-256 checksum approach (see README).
+Deliberately small and focused — these cover the pure-function helpers
+in utils.py on their edge cases, not the full pipeline.
 
 Run with:
     pytest tests/ -v
@@ -150,6 +148,6 @@ class TestConfiguration:
         assert 0 < MISSING_DROP_PCT < 100
 
     def test_random_state_is_fixed_int(self):
-        # Pipeline must be deterministic for the SHA checksum approach to work
+        # Fixed seed so pipeline runs are reproducible
         from src.utils import RANDOM_STATE
         assert isinstance(RANDOM_STATE, int)

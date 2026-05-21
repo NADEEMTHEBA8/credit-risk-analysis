@@ -1,18 +1,17 @@
 -- ============================================================================
 -- SQL Data Quality Checks
 -- ============================================================================
--- Run after pipeline output is loaded into Postgres. Each check uses
--- ON_ERROR_STOP so a failure produces a non-zero exit code, which Airflow
--- treats as a task failure and halts the DAG.
+-- Run after the pipeline output is loaded into Postgres. Each check raises
+-- an exception on failure, which (with ON_ERROR_STOP) produces a non-zero
+-- exit code — useful if these are ever wired into an automated check.
 --
--- Invoked from:
---   dags/credit_risk_dag.py  (dq_checks task)
---   Makefile                 (sql-test target)
+-- Run manually with:
+--   psql -h localhost -U postgres -d credit_risk -f tests/sql_data_quality.sql
 -- ============================================================================
 
 
 
--- ─── CHECK 1: Row count is exactly what we expect ───────────────────────────
+-- ─── CHECK 1: Row count matches the expected dataset size ───────────────────
 DO $$
 DECLARE
     actual_rows BIGINT;
@@ -42,7 +41,7 @@ END $$;
 
 
 -- ─── CHECK 3: Default rate stays in the expected band (7-9%) ────────────────
--- Home Credit default rate is 8.07%. Drift outside +/- 1% suggests data issues.
+-- A default rate drifting outside this band suggests a data load problem.
 DO $$
 DECLARE
     default_rate NUMERIC;
@@ -123,9 +122,10 @@ BEGIN
 END $$;
 
 
--- ─── CHECK 8: Known data quirks stay within expected counts ─────────────────
--- These aren't errors but their counts should be stable across reloads.
--- A 10x change indicates an upstream data issue worth investigating.
+-- ─── CHECK 8: Known data quirks stay within a sane range ────────────────────
+-- Negative bureau debt and over-limit utilisation are expected (see
+-- analysis.sql), but a large jump in either would point to an upstream
+-- data problem worth investigating.
 DO $$
 DECLARE
     neg_debt BIGINT;
@@ -136,7 +136,6 @@ BEGIN
     INTO neg_debt, over_limit
     FROM application;
 
-    -- Expected: ~1296 negative debt, ~1042 over-limit
     IF neg_debt > 5000 THEN
         RAISE WARNING 'DQ WARN: unusually high negative debt count: %', neg_debt;
     END IF;

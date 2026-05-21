@@ -8,12 +8,8 @@ import logging
 
 import pandas as pd
 
-try:
-    from src.utils import (DECISION_BETA, MISSING_DROP_PCT, PROCESSED,
-                           RANDOM_STATE, TEST_SIZE)
-except ModuleNotFoundError:
-    from utils import (DECISION_BETA, MISSING_DROP_PCT, PROCESSED,
-                        RANDOM_STATE, TEST_SIZE)
+from src.utils import (DECISION_BETA, MISSING_DROP_PCT, PROCESSED,
+                       RANDOM_STATE, TEST_SIZE)
 
 try:
     import mlflow
@@ -24,8 +20,8 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-# Columns exported for SQL analysis layer.
-# Matches the analysis.sql schema. Keep in sync if you add SQL features.
+# Columns exported for the SQL analysis layer.
+# Matches the analysis.sql schema — keep in sync if you add SQL features.
 SQL_COLUMNS = [
     'AMT_INCOME_TOTAL', 'AMT_CREDIT', 'AMT_GOODS_PRICE',
     'DAYS_BIRTH', 'DAYS_EMPLOYED',
