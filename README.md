@@ -44,10 +44,14 @@ The pipeline runs as a single-machine batch job:
 
 | Model | AUC-ROC | Recall (default) | Precision | F1 |
 |---|---:|---:|---:|---:|
-| Logistic Regression | 0.7721 | 0.696 | 0.135 | 0.226 |
-| Random Forest | 0.7526 | 0.490 | 0.156 | 0.237 |
-| **XGBoost** | **0.7837** | **0.679** | **0.176** | **0.279** |
-| LightGBM | 0.7820 | 0.648 | 0.184 | 0.286 |
+| Logistic Regression | 0.7721 | 0.6963 | 0.1739 | 0.2783 |
+| Random Forest | 0.7526 | 0.4898 | 0.2095 | 0.2935 |
+| **XGBoost** | **0.7837** | **0.6788** | **0.1914** | **0.2986** |
+| LightGBM | 0.7820 | 0.6475 | 0.1993 | 0.3048 |
+
+XGBoost was selected as the final model on AUC-ROC, which is threshold-independent.
+LightGBM is within 0.0017 AUC and has a slightly higher F1 — the two are close, and
+the threshold choice below matters more than that gap.
 
 Sorting customers by predicted risk score, the top 20% by score captures 56.7% of
 all actual defaults — about 2.8× better than screening a random 20%.
@@ -175,12 +179,7 @@ make setup
 make run
 ```
 
-Outputs are written to:
-
-```text
-data/processed/
-figures/
-```
+Outputs are written to `data/processed/` (two CSVs) and `figures/` (4 PNG charts).
 
 ---
 
@@ -204,6 +203,9 @@ The SQL layer includes:
 - percentile risk bands
 - window-function analysis
 - composite scoring logic
+
+If Postgres rejects the connection with a password error, the local database volume
+is stale — reset it with `docker compose down -v`, then `make docker-up` again.
 
 ---
 
@@ -230,4 +232,3 @@ Built as a portfolio project while learning analytics engineering.
 **Nadeem Theba** — Rajkot, India
 
 - GitHub: https://github.com/NADEEMTHEBA8
-- LinkedIn: https://linkedin.com/in/nadeem-theba-602862208
