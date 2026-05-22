@@ -47,7 +47,7 @@ docker-down:  ## Stop containers
 
 sql-load:  ## Load processed CSV into Postgres
 	psql -h localhost -U postgres -d credit_risk \
-		-c "\COPY application FROM 'data/processed/credit_data_sql.csv' WITH (FORMAT csv, HEADER true);"
+		-c "\COPY credit_data FROM 'data/processed/credit_data_sql.csv' WITH (FORMAT csv, HEADER true);"
 
 sql-run:  ## Run the full SQL analysis script
 	psql -h localhost -U postgres -d credit_risk -f sql/analysis.sql

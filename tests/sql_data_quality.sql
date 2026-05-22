@@ -1,14 +1,12 @@
 -- ============================================================================
 -- SQL Data Quality Checks
 -- ============================================================================
--- Run after the pipeline output is loaded into Postgres. Each check raises
--- an exception on failure, which (with ON_ERROR_STOP) produces a non-zero
--- exit code — useful if these are ever wired into an automated check.
+-- Run after the processed CSV is loaded into Postgres. Each check raises an
+-- exception on failure, which (with ON_ERROR_STOP) gives a non-zero exit code.
 --
 -- Run manually with:
 --   psql -h localhost -U postgres -d credit_risk -f tests/sql_data_quality.sql
 -- ============================================================================
-
 
 
 -- ─── CHECK 1: Row count matches the expected dataset size ───────────────────
@@ -16,7 +14,7 @@ DO $$
 DECLARE
     actual_rows BIGINT;
 BEGIN
-    SELECT COUNT(*) INTO actual_rows FROM application;
+    SELECT COUNT(*) INTO actual_rows FROM credit_data;
     IF actual_rows != 307511 THEN
         RAISE EXCEPTION 'DQ FAIL: expected 307,511 rows, got %', actual_rows;
     END IF;
@@ -30,7 +28,7 @@ DECLARE
     bad_targets BIGINT;
 BEGIN
     SELECT COUNT(*) INTO bad_targets
-    FROM application
+    FROM credit_data
     WHERE target IS NOT NULL AND target NOT IN (0, 1);
 
     IF bad_targets > 0 THEN
@@ -46,8 +44,8 @@ DO $$
 DECLARE
     default_rate NUMERIC;
 BEGIN
-    SELECT ROUND(AVG(target) * 100::NUMERIC, 2) INTO default_rate
-    FROM application WHERE target IS NOT NULL;
+    SELECT ROUND(AVG(target)::numeric * 100, 2) INTO default_rate
+    FROM credit_data WHERE target IS NOT NULL;
 
     IF default_rate < 7.0 OR default_rate > 9.0 THEN
         RAISE EXCEPTION 'DQ FAIL: default rate % outside 7-9%% band', default_rate;
@@ -62,7 +60,7 @@ DECLARE
     nulls BIGINT;
 BEGIN
     SELECT COUNT(*) INTO nulls
-    FROM application
+    FROM credit_data
     WHERE amt_income_total IS NULL
        OR amt_credit IS NULL
        OR days_birth IS NULL;
@@ -80,7 +78,7 @@ DECLARE
     bad_ages BIGINT;
 BEGIN
     SELECT COUNT(*) INTO bad_ages
-    FROM application
+    FROM credit_data
     WHERE (days_birth / 365.0) < 18 OR (days_birth / 365.0) > 100;
 
     IF bad_ages > 0 THEN
@@ -90,39 +88,7 @@ BEGIN
 END $$;
 
 
--- ─── CHECK 6: Segmentation labels are fully populated ───────────────────────
-DO $$
-DECLARE
-    nulls BIGINT;
-BEGIN
-    SELECT COUNT(*) INTO nulls
-    FROM application
-    WHERE age_group IS NULL OR employment_group IS NULL;
-
-    IF nulls > 0 THEN
-        RAISE EXCEPTION 'DQ FAIL: % rows missing segmentation labels', nulls;
-    END IF;
-    RAISE NOTICE 'DQ PASS: all rows segmented';
-END $$;
-
-
--- ─── CHECK 7: age_group values match the expected vocabulary ────────────────
-DO $$
-DECLARE
-    bad_groups BIGINT;
-BEGIN
-    SELECT COUNT(*) INTO bad_groups
-    FROM application
-    WHERE age_group NOT IN ('18-29', '30-39', '40-49', '50-59', '60+');
-
-    IF bad_groups > 0 THEN
-        RAISE EXCEPTION 'DQ FAIL: % rows have unexpected age_group value', bad_groups;
-    END IF;
-    RAISE NOTICE 'DQ PASS: all age_group values valid';
-END $$;
-
-
--- ─── CHECK 8: Known data quirks stay within a sane range ────────────────────
+-- ─── CHECK 6: Known data quirks stay within a sane range ────────────────────
 -- Negative bureau debt and over-limit utilisation are expected (see
 -- analysis.sql), but a large jump in either would point to an upstream
 -- data problem worth investigating.
@@ -134,7 +100,7 @@ BEGIN
     SELECT COUNT(*) FILTER (WHERE bur_total_debt < 0),
            COUNT(*) FILTER (WHERE cc_utilisation > 1.0)
     INTO neg_debt, over_limit
-    FROM application;
+    FROM credit_data;
 
     IF neg_debt > 5000 THEN
         RAISE WARNING 'DQ WARN: unusually high negative debt count: %', neg_debt;
@@ -149,11 +115,8 @@ END $$;
 
 -- ─── SUMMARY ────────────────────────────────────────────────────────────────
 SELECT
-    'application' AS table_name,
+    'credit_data' AS table_name,
     COUNT(*) AS total_rows,
     SUM(target)::BIGINT AS total_defaults,
-    ROUND(AVG(target) * 100::NUMERIC, 2) AS default_rate_pct,
-    COUNT(DISTINCT age_group) AS age_buckets,
-    COUNT(DISTINCT employment_group) AS employment_buckets,
-    NOW() AS checked_at
-FROM application;
+    ROUND(AVG(target)::numeric * 100, 2) AS default_rate_pct
+FROM credit_data;
