@@ -1,23 +1,35 @@
 # ============================================================================
 # Credit Risk Pipeline — Makefile
 # ============================================================================
-# Common dev commands. Run `make help` to see all targets.
-# ============================================================================
 
-.PHONY: help setup run test lint clean docker-up docker-down sql-load sql-run
+.PHONY: help setup run test lint clean docker-up docker-down \
+        sql-init sql-load sql-run sql-reset
 
 PYTHON := python3
 VENV   := .venv
 PIP    := $(VENV)/bin/pip
 PY     := $(VENV)/bin/python
 
-help:  ## Show this help message
+DB_NAME := credit_risk
+DB_USER := postgres
+DB_HOST := localhost
+
+# ---------------------------------------------------------------------------
+# HELP
+# ---------------------------------------------------------------------------
+
+help: ## Show available commands
 	@echo "Credit Risk Pipeline — available commands:"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; \
+		{printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-setup: $(VENV)/bin/activate  ## Create venv and install dependencies
+# ---------------------------------------------------------------------------
+# PYTHON ENVIRONMENT
+# ---------------------------------------------------------------------------
+
+setup: $(VENV)/bin/activate ## Create virtual environment
 
 $(VENV)/bin/activate: requirements.txt
 	$(PYTHON) -m venv $(VENV)
@@ -25,29 +37,56 @@ $(VENV)/bin/activate: requirements.txt
 	$(PIP) install -r requirements.txt
 	@touch $(VENV)/bin/activate
 
-run:  ## Run the full pipeline end-to-end
+# ---------------------------------------------------------------------------
+# PIPELINE
+# ---------------------------------------------------------------------------
+
+run: ## Run full ML pipeline
 	$(PY) -m src.main
 
-test:  ## Run pytest test suite
+test: ## Run pytest suite
 	$(VENV)/bin/pytest tests/ -v
 
-lint:  ## Run ruff linter (if installed)
-	$(VENV)/bin/ruff check src/ tests/ 2>/dev/null || echo "ruff not installed - skipping"
+lint: ## Run ruff lint checks
+	$(VENV)/bin/ruff check src tests
 
-clean:  ## Remove generated files and caches
+# ---------------------------------------------------------------------------
+# CLEANUP
+# ---------------------------------------------------------------------------
+
+clean: ## Remove generated caches
 	rm -rf __pycache__ .pytest_cache .ruff_cache .coverage htmlcov
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
 	find . -type f -name "*.pyc" -delete
 
-docker-up:  ## Start Postgres container
+# ---------------------------------------------------------------------------
+# DOCKER
+# ---------------------------------------------------------------------------
+
+docker-up: ## Start PostgreSQL container
 	docker compose up -d postgres
 
-docker-down:  ## Stop containers
-	docker compose down
+docker-down: ## Stop containers
+	docker compose down -v
 
-sql-load:  ## Load processed CSV into Postgres
-	psql -h localhost -U postgres -d credit_risk \
-		-c "\COPY credit_data FROM 'data/processed/credit_data_sql.csv' WITH (FORMAT csv, HEADER true);"
+# ---------------------------------------------------------------------------
+# SQL WORKFLOW
+# ---------------------------------------------------------------------------
 
-sql-run:  ## Run the full SQL analysis script
-	psql -h localhost -U postgres -d credit_risk -f sql/analysis.sql
+sql-init: ## Create SQL schema only
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) \
+	-c "$$(sed -n '/^DROP TABLE/,/^);/p' sql/analysis.sql)"
+
+sql-load: ## Load processed analytical CSV
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) \
+	-c "\COPY credit_data FROM 'data/processed/credit_data_sql.csv' WITH (FORMAT csv, HEADER true);"
+
+sql-run: ## Run SQL analytics sections only
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) \
+	-c "$$(sed -n '/^-- 3. DATA QUALITY/,$$p' sql/analysis.sql)"
+
+sql-reset: sql-init sql-load sql-run ## Full SQL workflow
+
+# ============================================================================
+# END
+# ============================================================================
