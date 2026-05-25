@@ -28,8 +28,7 @@
 -- 1. TABLE CREATION
 -- ============================================================================
 
-DROP TABLE IF EXISTS credit_data;
-
+DROP TABLE IF EXISTS credit_data CASCADE;
 CREATE TABLE credit_data (
     amt_income_total       NUMERIC,
     amt_credit             NUMERIC,
@@ -64,9 +63,6 @@ CREATE TABLE credit_data (
 -- Or use the pgAdmin Import/Export dialog on the credit_data table
 -- (Format: csv, Header: on, Delimiter: comma).
 
-
-SELECT '==================================================' AS section,
-       'Data quality checks' AS analysis;
 
 -- ============================================================================
 -- 3. DATA QUALITY CHECKS
@@ -105,9 +101,6 @@ SELECT
 FROM credit_data;
 
 
-SELECT '==================================================' AS section,
-       'Portfolio overview' AS analysis;
-
 -- ============================================================================
 -- 4. PORTFOLIO OVERVIEW
 -- ============================================================================
@@ -123,9 +116,6 @@ SELECT
 FROM credit_data
 WHERE target IS NOT NULL;
 
-
-SELECT '==================================================' AS section,
-       'Risk segmentation: age, employment, income' AS analysis;
 
 -- ============================================================================
 -- 5. RISK SEGMENTATION  (inline CASE — no stored group columns)
@@ -200,9 +190,6 @@ GROUP BY income_band
 ORDER BY default_rate_pct DESC;
 
 
-SELECT '==================================================' AS section,
-       'Age x employment cohort matrix' AS analysis;
-
 -- ============================================================================
 -- 6. AGE x EMPLOYMENT COHORT MATRIX
 -- ============================================================================
@@ -239,9 +226,6 @@ GROUP BY age_band, employment_band
 HAVING COUNT(*) >= 500
 ORDER BY default_rate_pct DESC;
 
-
-SELECT '==================================================' AS section,
-       'Behavioural analysis: payment, card, bureau, prior apps' AS analysis;
 
 -- ============================================================================
 -- 7. BEHAVIOURAL ANALYSIS
@@ -341,9 +325,6 @@ GROUP BY prev_segment
 ORDER BY prev_segment;
 
 
-SELECT '==================================================' AS section,
-       'Window-function analysis: age and income quantiles' AS analysis;
-
 -- ============================================================================
 -- 8. WINDOW-FUNCTION ANALYSIS
 -- ============================================================================
@@ -393,9 +374,6 @@ FROM income_deciles
 GROUP BY income_decile
 ORDER BY income_decile;
 
-
-SELECT '==================================================' AS section,
-       'Ranking and cohort comparison' AS analysis;
 
 -- ============================================================================
 -- 9. RANKING / COHORT COMPARISON
@@ -460,9 +438,6 @@ SELECT
 FROM cohorts
 ORDER BY risk_rank;
 
-
-SELECT '==================================================' AS section,
-       'Helper view: cohort default-rate summary' AS analysis;
 
 -- ============================================================================
 -- 10. HELPER VIEW
