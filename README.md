@@ -42,12 +42,12 @@ The pipeline runs as a single-machine batch job:
 
 ## Results
 
-| Model | AUC-ROC | Recall (default) | Precision | F1 |
-|---|---:|---:|---:|---:|
-| Logistic Regression | 0.7721 | 0.6963 | 0.1739 | 0.2783 |
-| Random Forest | 0.7526 | 0.4898 | 0.2095 | 0.2935 |
-| **XGBoost** | **0.7837** | **0.6788** | **0.1914** | **0.2986** |
-| LightGBM | 0.7820 | 0.6475 | 0.1993 | 0.3048 |
+| Model | AUC-ROC | Avg Precision | Recall (default) | Precision | F1 |
+|---|---:|---:|---:|---:|---:|
+| Logistic Regression | 0.7721 | 0.2571 | 0.6963 | 0.1739 | 0.2783 |
+| Random Forest | 0.7526 | 0.2297 | 0.4898 | 0.2095 | 0.2935 |
+| **XGBoost** | **0.7837** | **0.2814** | **0.6788** | **0.1914** | **0.2986** |
+| LightGBM | 0.7820 | 0.2772 | 0.6475 | 0.1993 | 0.3048 |
 
 XGBoost was selected as the final model on AUC-ROC, which is threshold-independent.
 LightGBM is within 0.0017 AUC and has a slightly higher F1 — the two are close, and
@@ -119,7 +119,7 @@ flowchart TD
 
         ANALYSIS["risk segmentation
         window-function risk bands
-        composite risk score"]
+        cohort comparisons"]
 
         LOAD --> ANALYSIS
     end
@@ -140,13 +140,24 @@ so INNER JOIN dropped them entirely — roughly 37,000 customers.
 Recall dropped from 0.69 to 0.61 because the model lost a population it specifically
 needed to see. Switching to LEFT JOIN with median imputation restored it.
 
+### The strongest predictors aren't the ones I engineered
+
+I expected the behavioural features — payment lateness, credit card utilisation,
+employment stability — to top the list. They matter, but the three strongest signals
+by correlation are the external credit-bureau scores (`EXT_SOURCE_1/2/3`) that ship
+with the dataset. Age and employment stability are the strongest *behavioural*
+features, a step below the external scores.
+
+That shaped the SQL layer. The external scores are opaque third-party numbers, so
+they're not useful for segmentation — you can't explain a decision with them. The
+SQL analysis is built on age, employment stability, and payment behaviour instead:
+weaker individually, but interpretable and built from the bank's own data.
+
 ### Income-to-credit ratio was weaker than expected
 
-I assumed income-to-credit ratio would be one of the strongest predictors. Its actual
-correlation with the target ended up being close to zero.
-
-Age and employment stability were much stronger signals, which changed how I built
-the SQL segmentation logic.
+I assumed income-to-credit ratio would be a strong predictor. Its actual correlation
+with the target turned out close to zero — income alone barely separates the
+portfolio. Behavioural history is far more informative than raw income.
 
 ### F1 was the wrong threshold metric
 
@@ -179,30 +190,36 @@ make setup
 make run
 ```
 
-Outputs are written to `data/processed/` (two CSVs) and `figures/` (4 PNG charts).
+Outputs are written to `data/processed/` (two CSVs and a model-metrics CSV) and
+`figures/` (9 PNG charts).
 
 ---
 
 ## SQL analysis workflow
 
-The SQL analysis is a separate analyst workflow.
+The SQL analysis is a separate analyst step, run by hand against the exported CSV.
+`sql/analysis.sql` is both a schema script and an analysis script, so it is run in
+three stages rather than all at once:
 
 ```bash
 # Start local Postgres
 make docker-up
 
-# Load processed CSV into Postgres
+# 1. Create the table (run the schema block at the top of analysis.sql)
+psql -h localhost -U postgres -d credit_risk \
+  -c "$(sed -n '/^DROP TABLE/,/^);/p' sql/analysis.sql)"
+
+# 2. Load the processed CSV
 make sql-load
 
-# Run SQL analysis
-make sql-run
+# 3. Run the analysis queries
+psql -h localhost -U postgres -d credit_risk \
+  -c "$(sed -n '/^-- 3. DATA QUALITY/,$p' sql/analysis.sql)"
 ```
 
-The SQL layer includes:
-- risk segmentation
-- percentile risk bands
-- window-function analysis
-- composite scoring logic
+The SQL layer includes risk segmentation, window-function risk bands, age/income
+quantile analysis, and cohort comparisons — all computed inline from the exported
+columns, with no separate warehouse build.
 
 If Postgres rejects the connection with a password error, the local database volume
 is stale — reset it with `docker compose down -v`, then `make docker-up` again.
@@ -231,4 +248,4 @@ Built as a portfolio project while learning analytics engineering.
 
 **Nadeem Theba** — Rajkot, India
 
-- GitHub: https://github.com/NADEEMTHEBA8
+- GitHub: https://github.com/NADEEMTHEBA8s
