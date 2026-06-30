@@ -45,10 +45,14 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
 
-      - name: Load database schema
+      - name: Load database schema and mock data
         run: |
           sudo apt-get install -y postgresql-client
           psql -h localhost -U postgres -d credit_risk -c "CREATE TABLE credit_data (amt_income_total NUMERIC, amt_credit NUMERIC, amt_goods_price NUMERIC, days_birth INTEGER, days_employed NUMERIC, income_credit_ratio NUMERIC, employment_age_ratio NUMERIC, annuity_income_ratio NUMERIC, bur_total_debt NUMERIC, bur_num_credits NUMERIC, bur_max_overdue NUMERIC, prev_num_applications NUMERIC, prev_approval_rate NUMERIC, inst_late_rate NUMERIC, inst_days_late_mean NUMERIC, cc_utilisation NUMERIC, cc_dpd_max NUMERIC, pos_sk_dpd_max NUMERIC, pos_completion_rate NUMERIC, target NUMERIC);"
+          psql -h localhost -U postgres -d credit_risk -c "INSERT INTO credit_data (amt_income_total, amt_credit, days_birth, target) SELECT 100000, 500000, 15000, CASE WHEN random() < 0.0807 THEN 1 ELSE 0 END FROM generate_series(1, 307511);"
+
+      - name: Run dbt models
+        run: cd dbt && ../.venv/bin/dbt run
 
       - name: Run all tests (pytest and dbt)
         run: make test-all
