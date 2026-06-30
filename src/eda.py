@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from src.utils import FIGURES, PALETTE
+from src.utils import FIGURES, PALETTE, AGE_BINS, AGE_LABELS, EMP_BINS, EMP_LABELS, INC_BINS, INC_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -20,14 +20,11 @@ def run(train_df: pd.DataFrame) -> None:
     """Generate the 4 EDA figures from the training feature matrix."""
     eda = train_df.copy()
     eda['age_group']        = pd.cut(eda['age_years'],
-        bins=[0, 30, 40, 50, 60, float('inf')],
-        labels=['18-29', '30-39', '40-49', '50-59', '60+'])
+        bins=AGE_BINS, labels=AGE_LABELS)
     eda['employment_group'] = pd.cut(eda['employment_age_ratio'],
-        bins=[-0.001, 0.1, 0.3, 0.6, float('inf')],
-        labels=['Unstable', 'Short-term', 'Moderate', 'Stable'])
+        bins=EMP_BINS, labels=EMP_LABELS)
     eda['income_group']     = pd.cut(eda['AMT_INCOME_TOTAL'],
-        bins=[0, 100_000, 200_000, float('inf')],
-        labels=['Low', 'Medium', 'High'], right=False)
+        bins=INC_BINS, labels=INC_LABELS, right=False)
 
     _plot_top_predictors(eda)
     _plot_age_employment_heatmap(eda)

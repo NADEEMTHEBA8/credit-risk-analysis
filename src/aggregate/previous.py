@@ -34,11 +34,17 @@ def run() -> pd.DataFrame:
     for c in [col for col in prev.columns if col.startswith('DAYS_')]:
         prev[c] = prev[c].replace(365243, np.nan)
 
+    # Pre-derive status flags before the groupby so aggregation stays in
+    # the Cython fast path (lambda functions bypass it and use Python iteration).
+    prev['is_approved']  = (prev['NAME_CONTRACT_STATUS'] == 'Approved').astype(np.int8)
+    prev['is_refused']   = (prev['NAME_CONTRACT_STATUS'] == 'Refused').astype(np.int8)
+    prev['is_cancelled'] = (prev['NAME_CONTRACT_STATUS'] == 'Canceled').astype(np.int8)
+
     prev_agg = prev.groupby('SK_ID_CURR').agg(
         prev_num_applications      = ('SK_ID_PREV',             'count'),
-        prev_num_approved          = ('NAME_CONTRACT_STATUS',    lambda x: (x == 'Approved').sum()),
-        prev_num_refused           = ('NAME_CONTRACT_STATUS',    lambda x: (x == 'Refused').sum()),
-        prev_num_cancelled         = ('NAME_CONTRACT_STATUS',    lambda x: (x == 'Canceled').sum()),
+        prev_num_approved          = ('is_approved',             'sum'),
+        prev_num_refused           = ('is_refused',              'sum'),
+        prev_num_cancelled         = ('is_cancelled',            'sum'),
         prev_amt_credit_sum        = ('AMT_CREDIT',              'sum'),
         prev_amt_credit_mean       = ('AMT_CREDIT',              'mean'),
         prev_amt_annuity_mean      = ('AMT_ANNUITY',             'mean'),

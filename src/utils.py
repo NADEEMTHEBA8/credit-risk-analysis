@@ -1,5 +1,9 @@
 """
-Utility functions and configuration for the credit risk pipeline.
+Utility functions, configuration constants, and segmentation bin definitions
+for the credit risk pipeline.
+
+All pd.cut bin edges and labels for age, employment, and income segmentation
+live here so that features.py and eda.py share a single source of truth.
 """
 
 from __future__ import annotations
@@ -27,7 +31,23 @@ MISSING_DROP_PCT = 80
 # higher. beta=2.5 reflects that asymmetry.
 DECISION_BETA = 2.5
 
-# Domain-appropriate colour palette.
+# ── Segmentation bin definitions ──────────────────────────────────────────
+# Single source of truth used by both features.py and eda.py.
+# Change bin edges here; both modules pick them up automatically.
+
+AGE_BINS   = [0, 30, 40, 50, 60, float('inf')]
+AGE_LABELS = ['18-29', '30-39', '40-49', '50-59', '60+']
+
+EMP_BINS   = [-0.001, 0.1, 0.3, 0.6, float('inf')]
+EMP_LABELS = ['Unstable', 'Short-term', 'Moderate', 'Stable']
+
+INC_BINS   = [0, 100_000, 200_000, float('inf')]
+INC_LABELS = ['Low', 'Medium', 'High']
+
+RISK_BINS   = [-0.001, 0.3, 0.6, float('inf')]
+RISK_LABELS = ['High Risk', 'Medium Risk', 'Low Risk']
+
+# ── Domain-appropriate colour palette ─────────────────────────────────────
 PALETTE = {
     'risk'    : '#C1292E',  # brick red — high risk
     'safe'    : '#2D6A4F',  # forest green — low risk
@@ -85,17 +105,26 @@ def safe_divide(a, b, fill: float = 0):
 
 
 def validate_inputs() -> None:
-    """Check that required raw CSVs exist and are not truncated."""
+    """Check that required raw CSVs exist and contain a plausible row count.
+
+    Thresholds:
+      - < 50 % of expected rows → hard error (file is clearly truncated / wrong)
+      - < 90 % of expected rows → warning  (partial load, results may differ)
+
+    Row counts are approximated by counting newlines, which is fast but treats
+    multi-line quoted fields as extra rows.  The 50 % / 90 % bands are wide
+    enough to absorb that imprecision safely.
+    """
     required = {
-        'application_train.csv'    : 300_000,
-        'bureau.csv'               : 1_000_000,
-        'bureau_balance.csv'       : 20_000_000,
-        'previous_application.csv' : 1_000_000,
-        'POS_CASH_balance.csv'     : 5_000_000,
-        'credit_card_balance.csv'  : 2_000_000,
-        'installments_payments.csv': 10_000_000,
+        'application_train.csv'    : 307_511,
+        'bureau.csv'               : 1_716_428,
+        'bureau_balance.csv'       : 27_299_925,
+        'previous_application.csv' : 1_670_214,
+        'POS_CASH_balance.csv'     : 10_001_358,
+        'credit_card_balance.csv'  :  3_840_312,
+        'installments_payments.csv': 13_605_401,
     }
-    for fname, min_rows in required.items():
+    for fname, expected_rows in required.items():
         path = os.path.join(RAW_DIR, fname)
         if not os.path.exists(path):
             raise FileNotFoundError(
@@ -103,10 +132,17 @@ def validate_inputs() -> None:
                 f"Download from: "
                 f"https://www.kaggle.com/c/home-credit-default-risk/data"
             )
-        with open(path, 'rb') as f:
-            approx_rows = sum(1 for _ in f)
-        if approx_rows < min_rows // 100:
+        with open(path, 'rb') as fh:
+            approx_rows = sum(1 for _ in fh)
+        if approx_rows < expected_rows * 0.50:
             raise ValueError(
-                f"{fname}: only ~{approx_rows} lines. File may be incomplete."
+                f"{fname}: only ~{approx_rows:,} lines (expected ~{expected_rows:,}). "
+                f"File appears truncated or is the wrong version."
+            )
+        if approx_rows < expected_rows * 0.90:
+            log.warning(
+                f"  {fname}: ~{approx_rows:,} lines — "
+                f"below 90 %% of expected {expected_rows:,}. "
+                f"Results may differ from published benchmarks."
             )
     log.info("  Input validation passed.")

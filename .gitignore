@@ -20,3 +20,12 @@ figures/*
 !figures/.gitkeep
 *.pkl
 *.joblib
+
+# Serialised model artefacts (timestamped .joblib files from export.save_model)
+models/*
+!models/.gitkeep
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/

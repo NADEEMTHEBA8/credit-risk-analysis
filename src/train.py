@@ -7,8 +7,9 @@ Trains 4 models with sensible defaults:
   - XGBoost              — strong on tabular
   - LightGBM             — close to XGBoost, faster
 
-GradientBoostingClassifier was tested and removed — see notes at the bottom
-of main.py for the experiments-rejected log.
+GradientBoostingClassifier was tested and removed: it was 4–6× slower than
+XGBoost with no measurable AUC improvement on this dataset, and its lack of
+GPU/parallelism support ruled it out at production scale.
 """
 
 from __future__ import annotations
@@ -78,8 +79,7 @@ def train_models(X_train: pd.DataFrame, y_train: pd.Series) -> dict:
             ('model',   XGBClassifier(n_estimators=400, max_depth=5, learning_rate=0.05,
                                        subsample=0.8, colsample_bytree=0.8,
                                        scale_pos_weight=spw, eval_metric='auc',
-                                       random_state=RANDOM_STATE, n_jobs=-1,
-                                       use_label_encoder=False))
+                                       random_state=RANDOM_STATE, n_jobs=-1))
         ])
         xgb_pipe.fit(X_train, y_train)
         models['XGBoost'] = xgb_pipe

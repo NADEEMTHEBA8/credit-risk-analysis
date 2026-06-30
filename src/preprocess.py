@@ -39,7 +39,7 @@ def encode(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
 
     SET_col = df['SET'].copy()
     df_ids  = df['SK_ID_CURR'].copy()
-    df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
     bin_cats = [c for c in df.select_dtypes('object').columns if df[c].nunique() <= 2]
     le = LabelEncoder()
@@ -71,7 +71,12 @@ def impute_and_cap(df: pd.DataFrame) -> pd.DataFrame:
     num_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c != 'TARGET']
     medians  = df[num_cols].median()
     df[num_cols] = df[num_cols].fillna(medians)
-    assert df[num_cols].isnull().sum().sum() == 0, "Imputation left NaN values"
+    null_remaining = df[num_cols].isnull().sum().sum()
+    if null_remaining:
+        raise ValueError(
+            f"Imputation left {null_remaining} NaN values — "
+            f"check for all-NaN columns that slipped past the missing-drop threshold."
+        )
 
     # Cap monetary columns at 1st and 99th percentiles to prevent extreme
     # outliers from dominating tree splits.

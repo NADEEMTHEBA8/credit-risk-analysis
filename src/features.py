@@ -17,7 +17,7 @@ import logging
 
 import numpy as np
 import pandas as pd
-from src.utils import safe_divide
+from src.utils import load_csv, reduce_memory, safe_divide, AGE_BINS, AGE_LABELS, EMP_BINS, EMP_LABELS, INC_BINS, INC_LABELS, RISK_BINS, RISK_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -70,21 +70,18 @@ def engineer(df: pd.DataFrame, app_columns: list[str]) -> pd.DataFrame:
         df['AMT_INCOME_TOTAL'])
 
     # Segmentation labels — dropped before ML, used only for SQL and EDA.
-    df['income_group'] = pd.cut(df['AMT_INCOME_TOTAL'],
-        bins=[0, 100_000, 200_000, float('inf')],
-        labels=['Low', 'Medium', 'High'], right=False)
-    df['loan_size']    = pd.cut(df['AMT_CREDIT'],
+    # Bin edges and labels are defined in utils.py so eda.py shares them.
+    df['income_group']     = pd.cut(df['AMT_INCOME_TOTAL'],
+        bins=INC_BINS, labels=INC_LABELS, right=False)
+    df['loan_size']        = pd.cut(df['AMT_CREDIT'],
         bins=[0, 100_000, 500_000, float('inf')],
         labels=['Small', 'Medium', 'Large'], right=False)
-    df['age_group']    = pd.cut(df['age_years'],
-        bins=[0, 30, 40, 50, 60, float('inf')],
-        labels=['18-29', '30-39', '40-49', '50-59', '60+'])
-    df['risk_level']   = pd.cut(df['income_credit_ratio'],
-        bins=[-0.001, 0.3, 0.6, float('inf')],
-        labels=['High Risk', 'Medium Risk', 'Low Risk'])
+    df['age_group']        = pd.cut(df['age_years'],
+        bins=AGE_BINS, labels=AGE_LABELS)
+    df['risk_level']       = pd.cut(df['income_credit_ratio'],
+        bins=RISK_BINS, labels=RISK_LABELS)
     df['employment_group'] = pd.cut(df['employment_age_ratio'],
-        bins=[-0.001, 0.1, 0.3, 0.6, float('inf')],
-        labels=['Unstable', 'Short-term', 'Moderate', 'Stable'])
+        bins=EMP_BINS, labels=EMP_LABELS)
 
     log.info(f"  Features after engineering: {df.shape[1]}")
     return df

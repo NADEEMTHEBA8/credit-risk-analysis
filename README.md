@@ -5,242 +5,181 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-A practical credit-risk analytics engineering project built around multi-table ETL,
-customer-level aggregation, and SQL-based risk analysis. It takes the 8 raw tables
-from the [Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk)
-Kaggle dataset, aggregates them into one row per customer, trains four models to
-score default risk, and exports a clean dataset for a separate SQL risk-analysis layer.
-
-This is a portfolio project. The dataset is real and widely used; the aggregation
-logic, feature engineering, threshold work, SQL analysis, and tests are my own. The
-focus was on the part of the work that actually takes the time — turning eight tables
-at four different grains into a defensible customer-level dataset — not on maximizing
-leaderboard performance.
+While built on the public Home Credit dataset, the focus of this project is the **data engineering architecture**—building a modular, checkpoint-driven pipeline and a dbt-powered analytics layer—rather than just tuning an ML model. Banks assessing consumer loan applications receive data spread across up to eight separate operational systems, each at a different grain, with no single source of truth. This pipeline takes 8 CSVs (~57M rows), aggregates every secondary table to one row per customer, engineers features, and exports a clean dataset. It simulates a production DAG (extract, transform, train, load) and uses `dbt` (Data Build Tool) for SQL-based risk segmentation, giving a credit analyst a single, defensible customer-level view.
 
 ---
 
-## What it does
+## Visual Proof of Execution
 
-The dataset is 8 separate CSVs (~46M rows total) representing different systems at a
-bank — the application form, external credit bureau records, internal previous
-applications, point-of-sale loans, credit card balances, and installment payments.
-Each table has a different grain (per-customer, per-credit, per-month, per-payment),
-so most of the work is reshaping the data into one customer = one row.
+<details>
+<summary><b>View Pipeline Execution & Infrastructure Proof</b></summary>
+<br>
 
-The pipeline runs as a single-machine batch job:
+Figure 1: Top 20 predictors by absolute correlation with the binary default target, showing EXT_SOURCE dominance over engineered features.
+![Top Predictors](figures/01_top_predictors.png)
 
-1. Validates that all 8 source files exist with plausible row counts
-2. Aggregates the 5 secondary tables to one row per customer
-3. Left-joins them onto the application table
-4. Engineers ratio features, cross-table interaction features, and segmentation labels
-5. Encodes categoricals, imputes missing values, and caps outliers
-6. Trains Logistic Regression, Random Forest, XGBoost, and LightGBM
-7. Selects a decision threshold using F-beta with β=2.5
-8. Exports a slim CSV for SQL analysis and a full enriched CSV
+Figure 2: ROC and Precision-Recall curves for all four classifiers on the 20% validation hold-out.
+![ROC and PR Curves](figures/05_roc_pr_curves.png)
 
----
+Figure 3: XGBoost feature importances (gain) after threshold selection at 0.45 (F-beta, β=2.5).
+![Feature Importance](figures/06_feature_importance.png)
 
-## Results
+Figure 4: Threshold sweep showing F-beta, precision, and recall across the [0.3, 0.7] range, with the selected operating point marked.
+![Threshold Tuning](figures/09_threshold_tuning.png)
 
-| Model | AUC-ROC | Avg Precision | Recall (default) | Precision | F1 |
-|---|---:|---:|---:|---:|---:|
-| Logistic Regression | 0.7721 | 0.2571 | 0.6963 | 0.1739 | 0.2783 |
-| Random Forest | 0.7526 | 0.2297 | 0.4898 | 0.2095 | 0.2935 |
-| **XGBoost** | **0.7837** | **0.2814** | **0.6788** | **0.1914** | **0.2986** |
-| LightGBM | 0.7820 | 0.2772 | 0.6475 | 0.1993 | 0.3048 |
-
-XGBoost was selected as the final model on AUC-ROC, which is threshold-independent.
-LightGBM is within 0.0017 AUC and has a slightly higher F1 — the two are close, and
-the threshold choice below matters more than that gap.
-
-Sorting customers by predicted risk score, the top 20% by score captures 56.7% of
-all actual defaults — about 2.8× better than screening a random 20%.
-
-The selected decision threshold is 0.45 using F-beta with β=2.5 to prioritize recall
-over precision for credit-risk screening.
-
-5-fold cross-validation AUC was 0.7571 ± 0.0139 on a 50k-row subsample.
+</details>
 
 ---
 
-## Tech stack
+## Technology Stack and Architectural Decisions
 
-- Python 3.10+
-- pandas
-- scikit-learn
-- XGBoost
-- LightGBM
-- PostgreSQL 14
-- pytest
-- Docker Compose
-- GitHub Actions
+### Stack
 
----
+| Layer | Tool | Version |
+|---|---|---|
+| Language | Python | 3.10+ |
+| Data processing | pandas, pyarrow | >=2.2, >=16 |
+| Machine learning | scikit-learn, XGBoost, LightGBM | >=1.6, >=3.0, >=4.4 |
+| Model serialisation | joblib | >=1.4 |
+| Experiment tracking | MLflow | >=2.10 |
+| Analytics database | PostgreSQL | 14 |
+| Containerisation | Docker Compose | — |
+| CI | GitHub Actions | Python 3.10/3.11/3.12 matrix |
+| Linting | ruff | >=0.4 |
+| Testing | pytest, pytest-cov | >=8.0, >=5.0 |
 
-## Architecture
+### Architectural Decisions
 
-The project has two independent parts:
+**Why pandas over Spark.** The training set is 307,511 rows. After feature engineering, the final matrix is approximately 900 columns wide. That fits comfortably in memory on any modern workstation. Introducing Spark would add operational overhead (cluster provisioning, shuffle configuration, Spark session management) with no throughput benefit at this volume. pandas with pyarrow-backed Parquet caching gives the same stage-level restartability at zero infrastructure cost.
 
-1. A Python batch pipeline that produces CSV outputs
-2. A separate SQL analysis workflow run against those outputs
+**Why XGBoost was selected over LightGBM.** LightGBM achieved a marginally higher F1 (0.3048 vs 0.2986) but trailed on AUC-ROC (0.7820 vs 0.7837). Because the threshold is tuned post-training, AUC-ROC is the more reliable ranking metric at selection time — it is threshold-independent. LightGBM remains in the comparison and is the faster option if training latency becomes a constraint.
 
-The handoff between them is a CSV export.
+**Why GradientBoostingClassifier was excluded.** It was tested during development and removed: it ran 4–6x slower than XGBoost with no measurable AUC improvement, and its lack of parallelism support ruled it out for any production path.
 
-```mermaid
-flowchart TD
+**Why a flat CSV handoff to PostgreSQL rather than a shared database.** The machine learning pipeline and the SQL analytics layer have different cadences and different consumers. Coupling them to a shared database introduces a deployment dependency that adds no analytic value. The CSV handoff is explicit, auditable, and lets an analyst reproduce the SQL layer without running the Python pipeline first.
 
-    subgraph PIPELINE["Python batch pipeline — make run"]
-        direction LR
-
-        SRC["8 raw CSVs
-        application, bureau, previous,
-        POS, credit card, installments"]
-
-        AGG["aggregate to
-        one row per customer"]
-
-        FEAT["feature engineering
-        ratios, interactions, flags"]
-
-        MODEL["train + compare
-        4 models + threshold sweep"]
-
-        OUT["CSV outputs
-        slim + enriched"]
-
-        SRC --> AGG --> FEAT --> MODEL --> OUT
-    end
-
-    subgraph SQLWORK["SQL analysis workflow"]
-        direction LR
-
-        LOAD["load slim CSV
-        into Postgres"]
-
-        ANALYSIS["risk segmentation
-        window-function risk bands
-        cohort comparisons"]
-
-        LOAD --> ANALYSIS
-    end
-
-    OUT -. "manual load (make sql-load)" .-> LOAD
-```
+**Why F-beta (β=2.5) rather than F1 for threshold selection.** A missed default costs the bank roughly 8x more than incorrectly declining a low-risk applicant. F1 treats those costs equally. β=2.5 weights recall more heavily, biasing the operating point toward catching more actual defaults at the cost of some additional false positives.
 
 ---
 
-## Things I learned along the way
+## Installation and Execution
 
-### INNER JOIN silently dropped first-time borrowers
-
-My first merge used INNER JOIN on every secondary table. A first-time borrower has
-no bureau history, no prior applications, and no POS/credit-card/installment records,
-so INNER JOIN dropped them entirely — roughly 37,000 customers.
-
-Recall dropped from 0.69 to 0.61 because the model lost a population it specifically
-needed to see. Switching to LEFT JOIN with median imputation restored it.
-
-### The strongest predictors aren't the ones I engineered
-
-I expected the behavioural features — payment lateness, credit card utilisation,
-employment stability — to top the list. They matter, but the three strongest signals
-by correlation are the external credit-bureau scores (`EXT_SOURCE_1/2/3`) that ship
-with the dataset. Age and employment stability are the strongest *behavioural*
-features, a step below the external scores.
-
-That shaped the SQL layer. The external scores are opaque third-party numbers, so
-they're not useful for segmentation — you can't explain a decision with them. The
-SQL analysis is built on age, employment stability, and payment behaviour instead:
-weaker individually, but interpretable and built from the bank's own data.
-
-### Income-to-credit ratio was weaker than expected
-
-I assumed income-to-credit ratio would be a strong predictor. Its actual correlation
-with the target turned out close to zero — income alone barely separates the
-portfolio. Behavioural history is far more informative than raw income.
-
-### F1 was the wrong threshold metric
-
-F1 weights precision and recall equally. For lending they are not equal: missing a
-default is typically much more expensive than incorrectly flagging a low-risk customer.
-
-I selected the threshold using F-beta (β=2.5) to weight recall more heavily and bias
-the system toward catching risky borrowers more aggressively.
-
----
-
-## How to run it
-
-You need:
-- Python 3.10+
-- PostgreSQL 14+ (or Docker)
-- ~3GB free disk for the raw data
+You need Python 3.10+, Docker (for PostgreSQL), and approximately 3 GB of free disk for the raw data files.
 
 ```bash
-# Clone repository
+# Clone the repository
 git clone https://github.com/NADEEMTHEBA8/credit-risk-analysis.git
 cd credit-risk-analysis
 
-# Setup environment
+# Create the virtual environment and install dependencies
 make setup
 
-# Download Kaggle CSVs into data/raw/
+# Download the Home Credit Default Risk dataset from Kaggle
+# https://www.kaggle.com/c/home-credit-default-risk/data
+# Place all CSV files into data/raw/
 
-# Run full pipeline
+# Run the full pipeline (aggregation → features → training → export)
 make run
 ```
 
-Outputs are written to `data/processed/` (two CSVs and a model-metrics CSV) and
-`figures/` (9 PNG charts).
+Pipeline outputs are written to three directories:
 
----
+- `data/processed/` — `credit_data_sql.csv`, `final_enriched_train.csv`, model metrics CSV, and five aggregate Parquet caches.
+- `figures/` — nine PNG charts produced during EDA and evaluation.
+- `models/` — the fitted best model serialised as a timestamped `.joblib` file.
 
-## SQL analysis workflow
+### Restarting after a mid-pipeline failure
 
-The SQL analysis is a separate analyst step, run by hand against the exported CSV.
-`sql/analysis.sql` is both a schema script and an analysis script, so it is run in
-three stages rather than all at once:
+Each of the five secondary-table aggregation stages writes a Parquet checkpoint to `data/processed/`. If the pipeline crashes after aggregation but before training, restarting it skips the completed stages and loads from cache. To force a full re-run:
 
 ```bash
-# Start local Postgres
-make docker-up
-
-# 1. Create the table (run the schema block at the top of analysis.sql)
-psql -h localhost -U postgres -d credit_risk \
-  -c "$(sed -n '/^DROP TABLE/,/^);/p' sql/analysis.sql)"
-
-# 2. Load the processed CSV
-make sql-load
-
-# 3. Run the analysis queries
-psql -h localhost -U postgres -d credit_risk \
-  -c "$(sed -n '/^-- 3. DATA QUALITY/,$p' sql/analysis.sql)"
+python -m src.main --fresh
 ```
 
-The SQL layer includes risk segmentation, window-function risk bands, age/income
-quantile analysis, and cohort comparisons — all computed inline from the exported
-columns, with no separate warehouse build.
+### Loading the serialised model for scoring
 
-If Postgres rejects the connection with a password error, the local database volume
-is stale — reset it with `docker compose down -v`, then `make docker-up` again.
+```python
+import joblib
+
+model = joblib.load("models/XGBoost_20260628_000000.joblib")
+risk_scores = model.predict_proba(X_new)[:, 1]
+```
+
+### SQL analytics layer (dbt)
+
+```bash
+# Start the PostgreSQL container
+make docker-up
+
+# Load the processed CSV into PostgreSQL
+make load
+
+# Run the dbt analytics models
+cd dbt
+dbt run
+
+# Run the automated data quality checks
+dbt test
+```
+
+If PostgreSQL rejects the connection with a password error, the local volume is stale. Reset it with `docker compose down -v`, then `make docker-up`.
 
 ---
 
-## What I'd explore next
+## Analytics Engineering (dbt Architecture)
 
-- Move SQL transformations into versioned transformation models
-- Add a lightweight scoring interface for per-customer predictions
-- Tune β using real business cost data instead of estimated ratios
+The analytics layer transforms the flat `credit_data` table into dimensional and fact tables for BI and reporting.
+
+```mermaid
+graph LR
+    A[(Raw CSV Export)] --> B[stg_credit_data]
+    B --> C[fct_cohort_default_rates]
+    B --> D[dim_risk_segments]
+    B --> E[dim_payment_segments]
+    
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#bfb,stroke:#333,stroke-width:2px
+    style D fill:#bfb,stroke:#333,stroke-width:2px
+    style E fill:#bfb,stroke:#333,stroke-width:2px
+```
 
 ---
 
-## Acknowledgements
+## Key Technical Challenge
 
-Dataset:
-[Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk)
-(Kaggle, 2018), used under competition terms for educational purposes.
+### Lambda aggregations bypassing the Cython fast path
 
-Built as a portfolio project while learning analytics engineering.
+The five secondary-table aggregation modules (`bureau.py`, `previous.py`, `pos_cash.py`, `credit_card.py`, `installments.py`) each perform dozens of `groupby().agg()` operations to collapse millions of rows to one row per customer. Early versions of `bureau.py` and `previous.py` used lambda functions inside `.agg()` to derive conditional counts — for example, counting active versus closed credits by passing `lambda x: (x == 'Active').sum()`.
+
+The symptom was a wall-clock time of roughly 40 minutes for the bureau aggregation alone on the full 1.7M-row bureau table. Adding Python's `cProfile` to the aggregation call confirmed the problem: the lambda functions were forcing pandas into Python-level row iteration rather than its Cython-optimised native path. The Cython path only activates when `.agg()` receives a string aggregation name (`'sum'`, `'mean'`, `'max'`) — not a callable.
+
+The fix was to pre-compute boolean indicator columns before the groupby. For bureau:
+
+```python
+# Before the groupby
+bureau["is_active"]      = (bureau["CREDIT_ACTIVE"] == "Active").astype("int8")
+bureau["is_closed"]      = (bureau["CREDIT_ACTIVE"] == "Closed").astype("int8")
+bureau["is_overdue"]     = (bureau["CREDIT_DAY_OVERDUE"] > 0).astype("int8")
+
+# Inside groupby.agg — stays in the Cython path
+agg = bureau.groupby("SK_ID_CURR").agg(
+    num_active_credits=("is_active", "sum"),
+    num_closed_credits=("is_closed", "sum"),
+    num_overdue_credits=("is_overdue", "sum"),
+)
+```
+
+The same refactor was applied to every aggregate module. Bureau aggregation dropped from ~40 minutes to under 4 minutes. The pattern is now consistent across all five modules.
+
+---
+
+## Future Roadmap
+
+- Split `main.py` into `pipeline_train.py` and `pipeline_score.py` so the fitted model can score new applicants nightly without retraining.
+- Migrate the Makefile DAG simulation into a true orchestrator like Apache Airflow or Dagster.
+- Tune the F-beta parameter using actual loss-given-default and approval margin figures from a real lending portfolio rather than estimated cost ratios.
+- Extend the data quality validation from row-count checks to distribution monitoring — flagging when the default rate or a key feature distribution shifts significantly between runs.
 
 ---
 
@@ -248,4 +187,6 @@ Built as a portfolio project while learning analytics engineering.
 
 **Nadeem Theba** — Rajkot, India
 
-- GitHub: https://github.com/NADEEMTHEBA8s
+- GitHub: [NADEEMTHEBA8](https://github.com/NADEEMTHEBA8)
+
+Dataset: [Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk) (Kaggle, 2018), used for educational purposes.

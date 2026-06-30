@@ -1,0 +1,30 @@
+version: 2
+
+sources:
+  - name: credit_risk
+    schema: public
+    tables:
+      - name: credit_data
+
+models:
+  - name: stg_credit_data
+    description: "Staging table for the credit default risk dataset."
+    columns:
+      - name: target
+        description: "Binary label indicating default (1) or repaid (0)."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+              # Check 2: TARGET is strictly binary
+      - name: amt_income_total
+        description: "Total income of the client."
+        tests:
+          - not_null
+      - name: amt_credit
+        description: "Credit amount of the loan."
+        tests:
+          - not_null
+      - name: days_birth
+        description: "Client's age in days at the time of application."
+        tests:
+          - not_null

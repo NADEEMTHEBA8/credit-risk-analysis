@@ -51,10 +51,15 @@ def run() -> pd.DataFrame:
     del bb_agg
     gc.collect()
 
+    # Pre-derive boolean flags before the groupby so aggregation stays in
+    # the Cython fast path (lambda functions bypass it and use Python iteration).
+    bureau['is_active'] = (bureau['CREDIT_ACTIVE'] == 'Active').astype(np.int8)
+    bureau['is_closed'] = (bureau['CREDIT_ACTIVE'] == 'Closed').astype(np.int8)
+
     bureau_agg = bureau.groupby('SK_ID_CURR').agg(
         bur_num_credits       = ('SK_ID_BUREAU',          'count'),
-        bur_num_active        = ('CREDIT_ACTIVE',          lambda x: (x == 'Active').sum()),
-        bur_num_closed        = ('CREDIT_ACTIVE',          lambda x: (x == 'Closed').sum()),
+        bur_num_active        = ('is_active',              'sum'),
+        bur_num_closed        = ('is_closed',              'sum'),
         bur_total_credit      = ('AMT_CREDIT_SUM',         'sum'),
         bur_avg_credit        = ('AMT_CREDIT_SUM',         'mean'),
         bur_total_debt        = ('AMT_CREDIT_SUM_DEBT',    'sum'),
